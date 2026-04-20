@@ -43,7 +43,10 @@ func (f *fakePrompter) SingleSelect(title string, items []string) (int, error) {
 }
 
 // fakeGit pretends a clone succeeded by creating target/.git.
-type fakeGit struct{ pullCalled bool }
+type fakeGit struct {
+	pullCalled bool
+	pullDirs   []string
+}
 
 func (f *fakeGit) Run(_ context.Context, dir string, args ...string) error {
 	if len(args) >= 3 && args[0] == "clone" {
@@ -52,6 +55,7 @@ func (f *fakeGit) Run(_ context.Context, dir string, args ...string) error {
 	}
 	if len(args) >= 1 && args[0] == "pull" {
 		f.pullCalled = true
+		f.pullDirs = append(f.pullDirs, dir)
 		return nil
 	}
 	return nil
@@ -286,6 +290,112 @@ func TestUpdateCallsPull(t *testing.T) {
 	}
 	if !g.pullCalled {
 		t.Error("pull should have been called")
+	}
+}
+
+func TestInstallFromImport(t *testing.T) {
+	app, home, proj, _, _, _ := setup(t)
+	seedConfig(t, home)
+	checkout := seedSkills(t, home, "alpha")
+	// Primary config declares an import.
+	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+		[]byte("imports:\n  - name: team\n    url: git@example:team/skills.git\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Our fake git clone just creates .git — we need to pre-populate the
+	// import dir so that after the clone, "beta" is present. The fakeGit in
+	// this test file ignores seedAfter, so we create the import manually
+	// before the CLI runs; then EnsureImportsCloned sees it exists and
+	// skips cloning.
+	importDir := filepath.Join(home, ".skillnk", "team")
+	if err := os.MkdirAll(filepath.Join(importDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(importDir, "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(t, app, "install", "--client=claude", "--skill=beta"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	link := filepath.Join(proj, ".claude", "skills", "beta")
+	dest, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if dest != filepath.Join(importDir, "beta") {
+		t.Errorf("symlink points to %q, want import path", dest)
+	}
+}
+
+func TestInstallClonesImportOnDemand(t *testing.T) {
+	app, home, _, _, _, _ := setup(t)
+	seedConfig(t, home)
+	checkout := seedSkills(t, home, "alpha")
+	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+		[]byte("imports:\n  - name: team\n    url: git@example:team/skills.git\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	// fakeGit's clone creates .git; no skills inside. Installing "alpha"
+	// (primary) must still work, and the import should have been cloned so
+	// its dir exists on disk.
+	if err := run(t, app, "install", "--client=claude", "--skill=alpha"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".skillnk", "team", ".git")); err != nil {
+		t.Errorf("import should have been cloned: %v", err)
+	}
+}
+
+func TestUpdatePullsImports(t *testing.T) {
+	app, home, _, _, g, _ := setup(t)
+	seedConfig(t, home)
+	checkout := seedSkills(t, home, "alpha")
+	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+		[]byte("imports:\n  - name: team\n    url: x\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-create the import so it's treated as existing.
+	if err := os.MkdirAll(filepath.Join(home, ".skillnk", "team", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g.pullDirs = nil
+	if err := run(t, app, "update"); err != nil {
+		t.Fatal(err)
+	}
+	if len(g.pullDirs) != 2 {
+		t.Errorf("expected 2 pulls (primary + import), got %v", g.pullDirs)
+	}
+}
+
+func TestListIncludesImportedSkills(t *testing.T) {
+	app, home, _, _, _, out := setup(t)
+	seedConfig(t, home)
+	checkout := seedSkills(t, home, "alpha")
+	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+		[]byte("imports:\n  - name: team\n    url: x\n"),
+		0o644); err != nil {
+		t.Fatal(err)
+	}
+	importDir := filepath.Join(home, ".skillnk", "team")
+	if err := os.MkdirAll(filepath.Join(importDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(importDir, "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := run(t, app, "list"); err != nil {
+		t.Fatal(err)
+	}
+	txt := out.String()
+	if !strings.Contains(txt, "alpha") || !strings.Contains(txt, "beta") {
+		t.Errorf("missing skills in list: %q", txt)
+	}
+	if !strings.Contains(txt, "from team") {
+		t.Errorf("missing import source marker: %q", txt)
 	}
 }
 

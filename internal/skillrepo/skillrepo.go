@@ -81,8 +81,9 @@ func (r Repo) Pull(ctx context.Context) error {
 
 // Skill describes one installable skill in the repo.
 type Skill struct {
-	Name string // directory name
-	Path string // absolute path to the skill directory
+	Name   string // directory name
+	Path   string // absolute path to the skill directory
+	Source string // "" for the primary repo, import name otherwise
 }
 
 // reservedTopLevel are directory names we never treat as skills even if the

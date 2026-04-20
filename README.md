@@ -25,6 +25,29 @@ $ skillnk init
 A "skill" is any top-level directory in that repo (dotfiles and `.github`
 are ignored).
 
+### Importing other skills repos
+
+You can extend your library with other people's skills repos by adding a
+`skillnk.yaml` (or `.yml`, `.json`, `.toml`) file to the root of your own
+skills repo:
+
+```yaml
+imports:
+  - name: team-skills
+    url: git@github.com:acme/team-skills.git
+  - url: https://github.com/charmbracelet/skills.git   # name defaults to "charmbracelet/skills"
+```
+
+- Only `url` is required. `name` defaults to the URL with the `github.com`
+  prefix stripped; it's also the directory name under `~/.skillnk/` where
+  the imported repo is cloned.
+- Imports are cloned on first use, appear alongside your own skills in
+  `list`/`install`, and are pulled by `update` along with the primary repo.
+- Imports are **not transitive**: a `skillnk` config inside an imported
+  repo is ignored.
+- If the same skill name appears in more than one source, the primary repo
+  wins, then imports in declaration order.
+
 ## Commands
 
 | command     | what it does                                                      |
@@ -34,7 +57,7 @@ are ignored).
 | `uninstall` | Remove previously-installed skill symlinks (sources untouched).   |
 | `list`      | List available skills; mark which are installed in this project. |
 | `status`    | Show installed skills and where they link to.                     |
-| `update`    | `git pull --ff-only` in the skills checkout.                      |
+| `update`    | `git pull --ff-only` in the primary checkout and every import.    |
 
 Non-interactive use:
 

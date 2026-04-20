@@ -200,7 +200,7 @@ func (a *App) cmdInstall() *cobra.Command {
 		Use:   "install",
 		Short: "Install one or more skills into the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := a.ensureConfig(cmd.Context())
+			_, layout, err := a.ensureConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -208,13 +208,19 @@ func (a *App) cmdInstall() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			repo := skillrepo.New(cfg.CheckoutDir, a.Git)
-			skills, err := repo.List()
+			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			if err != nil {
+				return err
+			}
+			if err := lib.EnsureImportsCloned(cmd.Context(), layout.SkillnkHome); err != nil {
+				return err
+			}
+			skills, err := lib.ListAll()
 			if err != nil {
 				return err
 			}
 			if len(skills) == 0 {
-				return fmt.Errorf("no skills found in %s", cfg.CheckoutDir)
+				return fmt.Errorf("no skills found in %s", layout.SkillnkHome)
 			}
 
 			chosen, err := selectSkills(a.Prompter, skills, skillFlags)
@@ -258,7 +264,11 @@ func selectSkills(p Prompter, all []skillrepo.Skill, byName []string) ([]skillre
 	}
 	names := make([]string, len(all))
 	for i, s := range all {
-		names[i] = s.Name
+		if s.Source != "" {
+			names[i] = fmt.Sprintf("%s  (%s)", s.Name, s.Source)
+		} else {
+			names[i] = s.Name
+		}
 	}
 	idxs, err := p.MultiSelect("Select skills to install:", names)
 	if err != nil {
@@ -345,12 +355,18 @@ func (a *App) cmdList() *cobra.Command {
 		Use:   "list",
 		Short: "List available skills and whether each is installed in the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := a.ensureConfig(cmd.Context())
+			_, layout, err := a.ensureConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
-			repo := skillrepo.New(cfg.CheckoutDir, a.Git)
-			skills, err := repo.List()
+			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			if err != nil {
+				return err
+			}
+			if err := lib.EnsureImportsCloned(cmd.Context(), layout.SkillnkHome); err != nil {
+				return err
+			}
+			skills, err := lib.ListAll()
 			if err != nil {
 				return err
 			}
@@ -371,11 +387,18 @@ func (a *App) cmdList() *cobra.Command {
 			}
 			for _, s := range skills {
 				marker := "  "
-				tail := ""
+				var parts []string
+				if s.Source != "" {
+					parts = append(parts, "from "+s.Source)
+				}
 				if clients, ok := installed[s.Name]; ok {
 					marker = "✓ "
 					sort.Strings(clients)
-					tail = "  (" + strings.Join(clients, ", ") + ")"
+					parts = append(parts, "installed: "+strings.Join(clients, ", "))
+				}
+				tail := ""
+				if len(parts) > 0 {
+					tail = "  (" + strings.Join(parts, "; ") + ")"
 				}
 				fmt.Fprintf(a.Out, "%s%s%s\n", marker, s.Name, tail)
 			}
@@ -424,15 +447,35 @@ func (a *App) cmdStatus() *cobra.Command {
 func (a *App) cmdUpdate() *cobra.Command {
 	return &cobra.Command{
 		Use:   "update",
-		Short: "Update the skills repo checkout (git pull --ff-only)",
+		Short: "Update the skills repo checkout and any imports (git pull --ff-only)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, err := a.ensureConfig(cmd.Context())
+			_, layout, err := a.ensureConfig(cmd.Context())
 			if err != nil {
 				return err
 			}
-			repo := skillrepo.New(cfg.CheckoutDir, a.Git)
-			fmt.Fprintf(a.Out, "Pulling %s ...\n", cfg.CheckoutDir)
-			return repo.Pull(cmd.Context())
+			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			if err != nil {
+				return err
+			}
+			// Pick up any imports the user has added since the last update,
+			// and any new imports introduced by pulling the primary repo.
+			if err := lib.EnsureImportsCloned(cmd.Context(), layout.SkillnkHome); err != nil {
+				return err
+			}
+			fmt.Fprintf(a.Out, "Pulling %s ...\n", lib.Primary.Dir)
+			for _, imp := range lib.Imports {
+				fmt.Fprintf(a.Out, "Pulling %s (%s) ...\n", imp.Name, imp.Repo.Dir)
+			}
+			if err := lib.PullAll(cmd.Context()); err != nil {
+				return err
+			}
+			// After pulling primary, its skillnk config may now declare new
+			// imports — clone those too.
+			lib, err = skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			if err != nil {
+				return err
+			}
+			return lib.EnsureImportsCloned(cmd.Context(), layout.SkillnkHome)
 		},
 	}
 }
