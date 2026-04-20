@@ -172,6 +172,57 @@ func TestDefaultImportName(t *testing.T) {
 	}
 }
 
+func TestReadImportsVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "skillnk.yaml", `
+imports:
+  - name: pinned
+    url: git@example:a/b.git
+    version: v1.2.3
+  - name: unpinned
+    url: git@example:c/d.git
+`)
+	got, err := ReadImports(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	if got[0].Version != "v1.2.3" {
+		t.Errorf("version = %q want v1.2.3", got[0].Version)
+	}
+	if got[1].Version != "" {
+		t.Errorf("unpinned version = %q want empty", got[1].Version)
+	}
+}
+
+func TestReadImportsVersionJSONAndTOML(t *testing.T) {
+	dirJSON := t.TempDir()
+	writeFile(t, dirJSON, "skillnk.json", `{"imports":[{"url":"x","version":"abc123"}]}`)
+	got, err := ReadImports(dirJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Version != "abc123" {
+		t.Errorf("json: got %+v", got)
+	}
+
+	dirTOML := t.TempDir()
+	writeFile(t, dirTOML, "skillnk.toml", `
+[[imports]]
+url = "x"
+version = "main"
+`)
+	got, err = ReadImports(dirTOML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Version != "main" {
+		t.Errorf("toml: got %+v", got)
+	}
+}
+
 func TestReadImportsMalformedYAML(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "skillnk.yaml", "::: not yaml :::\n\t-[")

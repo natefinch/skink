@@ -17,6 +17,12 @@ import (
 type Import struct {
 	Name string `yaml:"name" json:"name" toml:"name"`
 	URL  string `yaml:"url"  json:"url"  toml:"url"`
+	// Version is an optional git ref (tag, branch, or commit SHA) to pin
+	// the import to. If empty, the import tracks the remote default branch
+	// and is updated via git pull --ff-only. When set, skillnk checks out
+	// this ref after cloning and re-checks it out (after git fetch) on
+	// every update.
+	Version string `yaml:"version" json:"version" toml:"version"`
 }
 
 type repoConfigFile struct {

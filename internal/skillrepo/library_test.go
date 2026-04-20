@@ -14,9 +14,12 @@ type libFakeGit struct {
 	pullsAt   []string
 	pullErr   map[string]error
 	seedAfter map[string][]string // target dir -> list of skill dir names to create
+	allCalls  [][]string          // [dir, arg0, arg1, ...]
 }
 
 func (f *libFakeGit) Run(_ context.Context, dir string, args ...string) error {
+	call := append([]string{dir}, args...)
+	f.allCalls = append(f.allCalls, call)
 	if len(args) >= 3 && args[0] == "clone" {
 		target := filepath.Join(dir, args[2])
 		f.clonesAt = append(f.clonesAt, target)
@@ -281,3 +284,117 @@ imports:
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+func TestLibraryClonesAndChecksOutPinnedVersion(t *testing.T) {
+	home := t.TempDir()
+	seedPrimary(t, home, []string{"p"}, `
+imports:
+  - name: team
+    url: git@example:team/skills.git
+    version: v1.0.0
+`, "skillnk.yaml")
+	teamDir := filepath.Join(home, "team")
+	g := &libFakeGit{seedAfter: map[string][]string{teamDir: {"beta"}}}
+	lib, err := NewLibrary(home, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.EnsureImportsCloned(context.Background(), home); err != nil {
+		t.Fatal(err)
+	}
+	// should have a clone AND a checkout
+	var clones, checkouts []string
+	for _, c := range g.allCalls {
+		if len(c) >= 2 && c[1] == "clone" {
+			clones = append(clones, c[0])
+		}
+		if len(c) >= 3 && c[1] == "checkout" {
+			checkouts = append(checkouts, c[2])
+		}
+	}
+	if len(clones) != 1 {
+		t.Errorf("clones = %v", clones)
+	}
+	if len(checkouts) != 1 || checkouts[0] != "v1.0.0" {
+		t.Errorf("checkouts = %v (want [v1.0.0])", checkouts)
+	}
+}
+
+func TestLibraryUnpinnedImportClones(t *testing.T) {
+	home := t.TempDir()
+	seedPrimary(t, home, []string{"p"}, `
+imports:
+  - name: team
+    url: x
+`, "skillnk.yaml")
+	teamDir := filepath.Join(home, "team")
+	g := &libFakeGit{seedAfter: map[string][]string{teamDir: {"beta"}}}
+	lib, err := NewLibrary(home, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.EnsureImportsCloned(context.Background(), home); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range g.allCalls {
+		if len(c) >= 2 && c[1] == "checkout" {
+			t.Errorf("unpinned import should not checkout: %v", c)
+		}
+	}
+}
+
+func TestLibraryPullPinnedUsesFetchCheckout(t *testing.T) {
+	home := t.TempDir()
+	seedPrimary(t, home, []string{"p"}, `
+imports:
+  - name: pinned
+    url: x
+    version: v2
+  - name: floating
+    url: y
+`, "skillnk.yaml")
+	pinnedDir := filepath.Join(home, "pinned")
+	floatDir := filepath.Join(home, "floating")
+	g := &libFakeGit{seedAfter: map[string][]string{pinnedDir: {"a"}, floatDir: {"b"}}}
+	lib, err := NewLibrary(home, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lib.EnsureImportsCloned(context.Background(), home); err != nil {
+		t.Fatal(err)
+	}
+	// Reset call log so we only see update calls
+	g.allCalls = nil
+	if err := lib.PullAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sawPinnedFetch := false
+	sawPinnedCheckout := false
+	sawFloatPull := false
+	sawPinnedPull := false
+	for _, c := range g.allCalls {
+		if len(c) < 2 {
+			continue
+		}
+		dir, op := c[0], c[1]
+		switch {
+		case dir == pinnedDir && op == "fetch":
+			sawPinnedFetch = true
+		case dir == pinnedDir && op == "checkout" && len(c) >= 3 && c[2] == "v2":
+			sawPinnedCheckout = true
+		case dir == pinnedDir && op == "pull":
+			sawPinnedPull = true
+		case dir == floatDir && op == "pull":
+			sawFloatPull = true
+		}
+	}
+	if !sawPinnedFetch || !sawPinnedCheckout {
+		t.Errorf("pinned import should fetch+checkout, calls: %v", g.allCalls)
+	}
+	if sawPinnedPull {
+		t.Errorf("pinned import must not pull: %v", g.allCalls)
+	}
+	if !sawFloatPull {
+		t.Errorf("unpinned import should pull, calls: %v", g.allCalls)
+	}
+}

@@ -15,10 +15,13 @@ type Library struct {
 }
 
 // Source is one repo in a Library with the name it should be referred to by.
-// Name is "" for the primary repo, and the import name otherwise.
+// Name is "" for the primary repo, and the import name otherwise. Version
+// is the pinned git ref for imports, "" for the primary repo or unpinned
+// imports.
 type Source struct {
-	Name string
-	Repo Repo
+	Name    string
+	Version string
+	Repo    Repo
 }
 
 // NewLibrary constructs a Library for the given skillnk home dir. The
@@ -39,18 +42,19 @@ func NewLibrary(home string, git GitRunner) (Library, error) {
 	for _, imp := range imports {
 		dir := filepath.Join(home, imp.Name)
 		lib.Imports = append(lib.Imports, Source{
-			Name: imp.Name,
-			Repo: New(dir, git),
+			Name:    imp.Name,
+			Version: imp.Version,
+			Repo:    New(dir, git),
 		})
 	}
 	return lib, nil
 }
 
 // EnsureImportsCloned clones any import repos that are not yet present on
-// disk. Each import URL comes from the primary repo's config.
+// disk. For imports with a pinned version, the ref is checked out after
+// cloning.
 func (l Library) EnsureImportsCloned(ctx context.Context, home string) error {
-	primaryDir := l.Primary.Dir
-	imports, err := ReadImports(primaryDir)
+	imports, err := ReadImports(l.Primary.Dir)
 	if err != nil {
 		return err
 	}
@@ -63,13 +67,22 @@ func (l Library) EnsureImportsCloned(ctx context.Context, home string) error {
 		if err := r.Clone(ctx, imp.URL); err != nil {
 			return fmt.Errorf("clone import %q: %w", imp.Name, err)
 		}
+		if imp.Version != "" {
+			if err := r.Checkout(ctx, imp.Version); err != nil {
+				return fmt.Errorf("checkout import %q @ %s: %w", imp.Name, imp.Version, err)
+			}
+		}
 	}
 	return nil
 }
 
-// PullAll runs git pull on the primary repo and every import. Errors from
-// individual imports are collected and returned after all pulls are
-// attempted so one broken import doesn't block the rest.
+// PullAll updates the primary repo and every import. The primary repo is
+// always pulled with `git pull --ff-only`. For imports with a pinned
+// version, skillnk runs `git fetch --tags` followed by `git checkout
+// <version>`; unpinned imports are pulled with `git pull --ff-only`.
+//
+// Errors from individual imports are collected and returned after all
+// updates are attempted so one broken import doesn't block the rest.
 func (l Library) PullAll(ctx context.Context) error {
 	var errs []error
 	if err := l.Primary.Pull(ctx); err != nil {
@@ -79,14 +92,21 @@ func (l Library) PullAll(ctx context.Context) error {
 		if !imp.Repo.Exists() {
 			continue
 		}
-		if err := imp.Repo.Pull(ctx); err != nil {
+		var err error
+		if imp.Version != "" {
+			if err = imp.Repo.Fetch(ctx); err == nil {
+				err = imp.Repo.Checkout(ctx, imp.Version)
+			}
+		} else {
+			err = imp.Repo.Pull(ctx)
+		}
+		if err != nil {
 			errs = append(errs, fmt.Errorf("import %q: %w", imp.Name, err))
 		}
 	}
 	if len(errs) == 0 {
 		return nil
 	}
-	// Combine errors
 	var msg string
 	for i, e := range errs {
 		if i > 0 {

@@ -45,15 +45,22 @@ four formats. If multiple exist, this precedence applies (first match wins):
 
 One top-level key: `imports`, a list of objects.
 
-| field  | required | notes                                                             |
-|--------|----------|-------------------------------------------------------------------|
-| `url`  | yes      | Any git URL `git clone` understands.                              |
-| `name` | no       | Directory name under `~/.skillnk/` for the clone. See defaulting. |
+| field     | required | notes                                                             |
+|-----------|----------|-------------------------------------------------------------------|
+| `url`     | yes      | Any git URL `git clone` understands.                              |
+| `name`    | no       | Directory name under `~/.skillnk/` for the clone. See defaulting. |
+| `version` | no       | Pin to a specific git ref — tag, branch, or commit SHA.           |
 
 If `name` is omitted, skillnk strips the `github.com` prefix (handling the
 `https://`, `http://`, `ssh://git@`, `git@...:`, and bare forms) and any
 trailing `.git`, giving e.g. `owner/repo`. For non-GitHub URLs, the name
 defaults to the repo's basename (`repo` for `https://gitlab.example/team/repo.git`).
+
+If `version` is set, skillnk checks out that ref after cloning and
+re-checks it out (after `git fetch --tags`) on every `skillnk update`, so
+the import stays pinned even when you update the rest of your library. If
+`version` is omitted, the import tracks the remote default branch and is
+advanced via `git pull --ff-only` on update.
 
 Names must not contain `..`, start with `.` or `/`, or equal the reserved
 values `repo` or `config.yaml`. Duplicate names are rejected.
@@ -65,13 +72,14 @@ values `repo` or `config.yaml`. Duplicate names are rejected.
 imports:
   - name: team-skills
     url: git@github.com:acme/team-skills.git
-  - url: https://github.com/charmbracelet/skills.git   # name defaults to "charmbracelet/skills"
+    version: v1.4.0                                   # pinned to a tag
+  - url: https://github.com/charmbracelet/skills.git  # tracks default branch
 ```
 
 ```json
 {
   "imports": [
-    { "name": "team-skills", "url": "git@github.com:acme/team-skills.git" },
+    { "name": "team-skills", "url": "git@github.com:acme/team-skills.git", "version": "v1.4.0" },
     { "url": "https://github.com/charmbracelet/skills.git" }
   ]
 }
@@ -80,8 +88,9 @@ imports:
 ```toml
 # skillnk.toml
 [[imports]]
-name = "team-skills"
-url  = "git@github.com:acme/team-skills.git"
+name    = "team-skills"
+url     = "git@github.com:acme/team-skills.git"
+version = "v1.4.0"
 
 [[imports]]
 url = "https://github.com/charmbracelet/skills.git"
@@ -90,11 +99,14 @@ url = "https://github.com/charmbracelet/skills.git"
 ### Behavior
 
 - Imports are cloned into `~/.skillnk/<name>` on first use (during `install`,
-  `list`, or `update`).
+  `list`, or `update`). Pinned imports are checked out to `version` right
+  after cloning.
 - Their top-level directories appear alongside your own skills in `list` and
   the `install` picker, tagged with the source repo name.
-- `skillnk update` runs `git pull --ff-only` on the primary checkout and
-  every import.
+- `skillnk update` runs `git pull --ff-only` on the primary checkout and on
+  every unpinned import. For pinned imports, it runs `git fetch --tags`
+  followed by `git checkout <version>` so the import stays at the pinned
+  ref.
 - Imports are **not transitive**: a `skillnk` config inside an imported repo
   is ignored.
 - If the same skill name appears in more than one source, the primary repo

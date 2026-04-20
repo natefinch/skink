@@ -79,6 +79,26 @@ func (r Repo) Pull(ctx context.Context) error {
 	return r.Git.Run(ctx, r.Dir, "pull", "--ff-only")
 }
 
+// Fetch runs `git fetch --tags` in the checkout.
+func (r Repo) Fetch(ctx context.Context) error {
+	if !r.Exists() {
+		return fmt.Errorf("skillrepo: %s is not a git checkout", r.Dir)
+	}
+	return r.Git.Run(ctx, r.Dir, "fetch", "--tags")
+}
+
+// Checkout runs `git checkout <ref>` in the checkout. The ref may be a
+// branch name, tag, or commit SHA.
+func (r Repo) Checkout(ctx context.Context, ref string) error {
+	if !r.Exists() {
+		return fmt.Errorf("skillrepo: %s is not a git checkout", r.Dir)
+	}
+	if ref == "" {
+		return fmt.Errorf("skillrepo: empty ref")
+	}
+	return r.Git.Run(ctx, r.Dir, "checkout", ref)
+}
+
 // Skill describes one installable skill in the repo.
 type Skill struct {
 	Name   string // directory name
