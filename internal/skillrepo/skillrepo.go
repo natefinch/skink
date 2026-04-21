@@ -6,8 +6,10 @@
 package skillrepo
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,15 +24,28 @@ type GitRunner interface {
 }
 
 // ExecGit is the production GitRunner, shelling out to the git binary.
-type ExecGit struct{}
+// When Verbose is false (the default), stdout/stderr are suppressed and
+// only surfaced if the command fails.
+type ExecGit struct {
+	Verbose bool
+}
 
-func (ExecGit) Run(ctx context.Context, dir string, args ...string) error {
+func (g ExecGit) Run(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var buf bytes.Buffer
+	if g.Verbose {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = &buf
+	}
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		if g.Verbose || buf.Len() == 0 {
+			return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(buf.String()))
 	}
 	return nil
 }

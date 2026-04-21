@@ -77,12 +77,21 @@ func Execute() error {
 // Root returns the root cobra command.
 func (a *App) Root() *cobra.Command {
 	a.defaults()
+	var verbose bool
 	root := &cobra.Command{
 		Use:           "skillnk",
 		Short:         "Manage AI client skills via symlinks from a personal skills repo",
 		SilenceUsage:  true,
 		SilenceErrors: false,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if verbose {
+				if _, ok := a.Git.(skillrepo.ExecGit); ok {
+					a.Git = skillrepo.ExecGit{Verbose: true}
+				}
+			}
+		},
 	}
+	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show git command output")
 	root.AddCommand(
 		a.cmdInit(),
 		a.cmdInstall(),
