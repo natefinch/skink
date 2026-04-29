@@ -1,5 +1,9 @@
 # skink
 
+<img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/c3c5610f-3a18-46df-8d00-7790860748e1" />
+
+
+
 A tiny CLI that links skills from your personal skills git repo into the AI
 client (Claude, Copilot, Cursor, Codex) a project uses. Skills live in one
 place, are version-controlled, and are shared across projects via symlinks.
