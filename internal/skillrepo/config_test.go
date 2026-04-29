@@ -22,7 +22,7 @@ func TestReadImportsNoFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != nil {
+	if got.Imports != nil {
 		t.Errorf("want nil, got %+v", got)
 	}
 }
@@ -31,21 +31,23 @@ func TestReadImportsAllFormats(t *testing.T) {
 	cases := []struct {
 		fname, body string
 	}{
-		{"skillnk.yaml", `
+		{"skink.yaml", `
 imports:
   - url: git@github.com:acme/team-skills.git
-    dir: skills/foo
+    dirs:
+      - skills/foo
+      - skills/bar/*
     version: v1
   - url: https://github.com/charm/skills.git
 `},
-		{"skillnk.json", `{"imports":[
-  {"url":"git@github.com:acme/team-skills.git","dir":"skills/foo","version":"v1"},
+		{"skink.json", `{"imports":[
+  {"url":"git@github.com:acme/team-skills.git","dirs":["skills/foo","skills/bar/*"],"version":"v1"},
   {"url":"https://github.com/charm/skills.git"}
 ]}`},
-		{"skillnk.toml", `
+		{"skink.toml", `
 [[imports]]
 url = "git@github.com:acme/team-skills.git"
-dir = "skills/foo"
+dirs = ["skills/foo", "skills/bar/*"]
 version = "v1"
 
 [[imports]]
@@ -60,14 +62,14 @@ url = "https://github.com/charm/skills.git"
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(got) != 2 {
+			if len(got.Imports) != 2 {
 				t.Fatalf("got %+v", got)
 			}
-			if got[0].URL != "git@github.com:acme/team-skills.git" || got[0].Dir != "skills/foo" || got[0].Version != "v1" {
-				t.Errorf("got[0] = %+v", got[0])
+			if got.Imports[0].URL != "git@github.com:acme/team-skills.git" || strings.Join(got.Imports[0].Dirs, ",") != "skills/foo,skills/bar/*" || got.Imports[0].Version != "v1" {
+				t.Errorf("got.Imports[0] = %+v", got.Imports[0])
 			}
-			if got[1].URL != "https://github.com/charm/skills.git" {
-				t.Errorf("got[1] = %+v", got[1])
+			if got.Imports[1].URL != "https://github.com/charm/skills.git" {
+				t.Errorf("got.Imports[1] = %+v", got.Imports[1])
 			}
 		})
 	}
@@ -75,7 +77,7 @@ url = "https://github.com/charm/skills.git"
 
 func TestReadImportsMissingURL(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skillnk.yaml", "imports:\n  - dir: foo\n")
+	writeFile(t, dir, "skink.yaml", "imports:\n  - dirs:\n      - foo\n")
 	_, err := ReadImports(dir)
 	if err == nil || !strings.Contains(err.Error(), "url is required") {
 		t.Errorf("want url required, got %v", err)
@@ -84,7 +86,7 @@ func TestReadImportsMissingURL(t *testing.T) {
 
 func TestReadImportsBadURL(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skillnk.yaml", "imports:\n  - url: nonsense\n")
+	writeFile(t, dir, "skink.yaml", "imports:\n  - url: nonsense\n")
 	_, err := ReadImports(dir)
 	if err == nil {
 		t.Fatal("want error")
@@ -93,10 +95,11 @@ func TestReadImportsBadURL(t *testing.T) {
 
 func TestReadImportsBadDir(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skillnk.yaml", `
+	writeFile(t, dir, "skink.yaml", `
 imports:
   - url: github.com/a/b
-    dir: ../escape
+    dirs:
+      - ../escape
 `)
 	_, err := ReadImports(dir)
 	if err == nil {
@@ -146,10 +149,10 @@ func TestParseDir(t *testing.T) {
 
 func TestParseGitURL(t *testing.T) {
 	cases := []struct {
-		in    string
-		ok    bool
-		host  string
-		path  string
+		in   string
+		ok   bool
+		host string
+		path string
 	}{
 		{"github.com/anthropics/skills", true, "github.com", "anthropics/skills"},
 		{"github.com/anthropics/skills/", true, "github.com", "anthropics/skills"},

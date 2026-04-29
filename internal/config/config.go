@@ -1,6 +1,6 @@
-// Package config loads and saves the skillnk user config file.
+// Package config loads and saves the skink user config file.
 //
-// The config is a small YAML document stored at ~/.skillnk/config.yaml
+// The config is a small YAML document stored at ~/.skink/config.yaml
 // (see package paths). It tracks the URL of the user's skills repo and
 // the checkout directory on disk.
 package config
@@ -14,7 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the persisted skillnk configuration.
+// Config is the persisted skink configuration.
 type Config struct {
 	SkillsRepo  string `yaml:"skills_repo"`
 	CheckoutDir string `yaml:"checkout_dir"`

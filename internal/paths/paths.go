@@ -1,5 +1,5 @@
-// Package paths resolves filesystem locations used by skillnk:
-// the user's home directory, the skillnk home (~/.skillnk), the checkout
+// Package paths resolves filesystem locations used by skink:
+// the user's home directory, the skink home (~/.skink), the checkout
 // directory inside it, and the project root for an install.
 //
 // The package is pure and FS-free aside from calls through an Env
@@ -46,12 +46,12 @@ func (f FakeEnv) Getwd() (string, error) {
 	return f.Wd, nil
 }
 
-// Layout holds the resolved skillnk paths.
+// Layout holds the resolved skink paths.
 type Layout struct {
-	Home        string // user home, e.g. /Users/me
-	SkillnkHome string // ~/.skillnk
-	Checkout    string // ~/.skillnk/repo
-	Config      string // ~/.skillnk/config.yaml
+	Home      string // user home, e.g. /Users/me
+	SkinkHome string // ~/.skink
+	Checkout  string // ~/.skink/repo
+	Config    string // ~/.skink/config.yaml
 }
 
 // Resolve builds a Layout from the given Env.
@@ -66,12 +66,12 @@ func Resolve(env Env) (Layout, error) {
 	if home == "" {
 		return Layout{}, errors.New("paths: empty home directory")
 	}
-	sh := filepath.Join(home, ".skillnk")
+	sh := filepath.Join(home, ".skink")
 	return Layout{
-		Home:        home,
-		SkillnkHome: sh,
-		Checkout:    filepath.Join(sh, "repo"),
-		Config:      filepath.Join(sh, "config.yaml"),
+		Home:      home,
+		SkinkHome: sh,
+		Checkout:  filepath.Join(sh, "repo"),
+		Config:    filepath.Join(sh, "config.yaml"),
 	}, nil
 }
 

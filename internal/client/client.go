@@ -1,4 +1,4 @@
-// Package client describes the AI clients skillnk can install skills into
+// Package client describes the AI clients skink can install skills into
 // and how to detect which one a project uses.
 package client
 

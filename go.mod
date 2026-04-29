@@ -1,4 +1,4 @@
-module github.com/natefinch/skillnk
+module github.com/natefinch/skink
 
 go 1.25.1
 

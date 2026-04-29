@@ -1,4 +1,4 @@
-// Package cli wires the skillnk commands and is the only place that speaks
+// Package cli wires the skink commands and is the only place that speaks
 // both to the tui package and to all the core logic packages.
 package cli
 
@@ -14,12 +14,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/natefinch/skillnk/internal/client"
-	"github.com/natefinch/skillnk/internal/config"
-	"github.com/natefinch/skillnk/internal/installer"
-	"github.com/natefinch/skillnk/internal/paths"
-	"github.com/natefinch/skillnk/internal/skillrepo"
-	"github.com/natefinch/skillnk/internal/tui"
+	"github.com/natefinch/skink/internal/client"
+	"github.com/natefinch/skink/internal/config"
+	"github.com/natefinch/skink/internal/installer"
+	"github.com/natefinch/skink/internal/paths"
+	"github.com/natefinch/skink/internal/skillrepo"
+	"github.com/natefinch/skink/internal/tui"
 )
 
 // Prompter is the interactive surface the CLI needs. Tests supply a fake.
@@ -79,7 +79,7 @@ func (a *App) Root() *cobra.Command {
 	a.defaults()
 	var verbose bool
 	root := &cobra.Command{
-		Use:           "skillnk",
+		Use:           "skink",
 		Short:         "Manage AI client skills via symlinks from a personal skills repo",
 		SilenceUsage:  true,
 		SilenceErrors: false,
@@ -118,7 +118,7 @@ func (a *App) ensureConfig(ctx context.Context) (config.Config, paths.Layout, er
 		return cfg, layout, err
 	}
 	// First-run: ask for repo URL and clone.
-	fmt.Fprintln(a.Out, "Welcome to skillnk! Let's get set up.")
+	fmt.Fprintln(a.Out, "Welcome to skink! Let's get set up.")
 	url, err := a.Prompter.Text(
 		"First-time setup",
 		"Enter the git URL of your skills repo:",
@@ -145,14 +145,14 @@ func (a *App) ensureConfig(ctx context.Context) (config.Config, paths.Layout, er
 func (a *App) cmdInit() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
-		Short: "Initialize skillnk (prompt for skills repo, clone it)",
+		Short: "Initialize skink (prompt for skills repo, clone it)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			layout, err := paths.Resolve(a.Env)
 			if err != nil {
 				return err
 			}
 			if _, err := config.Load(layout.Config); err == nil {
-				return fmt.Errorf("skillnk is already initialized at %s (delete it first to re-init)", layout.Config)
+				return fmt.Errorf("skink is already initialized at %s (delete it first to re-init)", layout.Config)
 			} else if !errors.Is(err, config.ErrNotFound) {
 				return err
 			}
@@ -217,7 +217,7 @@ func (a *App) cmdInstall() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			lib, err := skillrepo.NewLibrary(layout.SkinkHome, a.Git)
 			if err != nil {
 				return err
 			}
@@ -229,7 +229,7 @@ func (a *App) cmdInstall() *cobra.Command {
 				return err
 			}
 			if len(skills) == 0 {
-				return fmt.Errorf("no skills found in %s", layout.SkillnkHome)
+				return fmt.Errorf("no skills found in %s", layout.SkinkHome)
 			}
 
 			chosen, err := selectSkills(a.Prompter, skills, skillFlags)
@@ -369,7 +369,7 @@ func (a *App) cmdList() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			lib, err := skillrepo.NewLibrary(layout.SkinkHome, a.Git)
 			if err != nil {
 				return err
 			}
@@ -463,7 +463,7 @@ func (a *App) cmdUpdate() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			lib, err := skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			lib, err := skillrepo.NewLibrary(layout.SkinkHome, a.Git)
 			if err != nil {
 				return err
 			}
@@ -479,9 +479,9 @@ func (a *App) cmdUpdate() *cobra.Command {
 			if err := lib.PullAll(cmd.Context()); err != nil {
 				return err
 			}
-			// After pulling primary, its skillnk config may now declare new
+			// After pulling primary, its skink config may now declare new
 			// imports — clone those too.
-			lib, err = skillrepo.NewLibrary(layout.SkillnkHome, a.Git)
+			lib, err = skillrepo.NewLibrary(layout.SkinkHome, a.Git)
 			if err != nil {
 				return err
 			}

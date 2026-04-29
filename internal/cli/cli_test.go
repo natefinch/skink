@@ -90,7 +90,7 @@ func setup(t *testing.T) (*App, string, string, *fakePrompter, *fakeGit, *bytes.
 // marks it as a git repo.
 func seedSkills(t *testing.T, home string, skills ...string) string {
 	t.Helper()
-	checkout := filepath.Join(home, ".skillnk", "repo")
+	checkout := filepath.Join(home, ".skink", "repo")
 	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func seedSkills(t *testing.T, home string, skills ...string) string {
 
 func seedConfig(t *testing.T, home string) {
 	t.Helper()
-	dir := filepath.Join(home, ".skillnk")
+	dir := filepath.Join(home, ".skink")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -129,10 +129,10 @@ func TestInitPrompts(t *testing.T) {
 	if err := run(t, app, "init"); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".skillnk", "config.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".skink", "config.yaml")); err != nil {
 		t.Errorf("config not written: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".skillnk", "repo", ".git")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".skink", "repo", ".git")); err != nil {
 		t.Errorf("checkout not created: %v", err)
 	}
 }
@@ -276,7 +276,7 @@ func TestUninstallRemovesSymlink(t *testing.T) {
 		t.Errorf("symlink should be gone: err=%v", err)
 	}
 	// source preserved
-	if _, err := os.Stat(filepath.Join(home, ".skillnk", "repo", "alpha")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".skink", "repo", "alpha")); err != nil {
 		t.Errorf("source removed: %v", err)
 	}
 }
@@ -297,13 +297,13 @@ func TestInstallFromImport(t *testing.T) {
 	app, home, proj, _, _, _ := setup(t)
 	seedConfig(t, home)
 	checkout := seedSkills(t, home, "alpha")
-	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+	if err := os.WriteFile(filepath.Join(checkout, "skink.yaml"),
 		[]byte("imports:\n  - url: git@example.com:team/skills.git\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Pre-populate the import clone so EnsureCloned skips it.
-	importDir := filepath.Join(home, ".skillnk", "example.com", "team", "skills")
+	importDir := filepath.Join(home, ".skink", "example.com", "team", "skills")
 	if err := os.MkdirAll(filepath.Join(importDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +328,7 @@ func TestInstallClonesImportOnDemand(t *testing.T) {
 	app, home, _, _, _, _ := setup(t)
 	seedConfig(t, home)
 	checkout := seedSkills(t, home, "alpha")
-	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+	if err := os.WriteFile(filepath.Join(checkout, "skink.yaml"),
 		[]byte("imports:\n  - url: git@example.com:team/skills.git\n"),
 		0o644); err != nil {
 		t.Fatal(err)
@@ -336,7 +336,7 @@ func TestInstallClonesImportOnDemand(t *testing.T) {
 	if err := run(t, app, "install", "--client=claude", "--skill=alpha"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	cloneDir := filepath.Join(home, ".skillnk", "example.com", "team", "skills", ".git")
+	cloneDir := filepath.Join(home, ".skink", "example.com", "team", "skills", ".git")
 	if _, err := os.Stat(cloneDir); err != nil {
 		t.Errorf("import should have been cloned: %v", err)
 	}
@@ -346,12 +346,12 @@ func TestUpdatePullsImports(t *testing.T) {
 	app, home, _, _, g, _ := setup(t)
 	seedConfig(t, home)
 	checkout := seedSkills(t, home, "alpha")
-	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+	if err := os.WriteFile(filepath.Join(checkout, "skink.yaml"),
 		[]byte("imports:\n  - url: github.com/acme/team\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}
-	importDir := filepath.Join(home, ".skillnk", "github.com", "acme", "team")
+	importDir := filepath.Join(home, ".skink", "github.com", "acme", "team")
 	if err := os.MkdirAll(filepath.Join(importDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -368,12 +368,12 @@ func TestListIncludesImportedSkills(t *testing.T) {
 	app, home, _, _, _, out := setup(t)
 	seedConfig(t, home)
 	checkout := seedSkills(t, home, "alpha")
-	if err := os.WriteFile(filepath.Join(checkout, "skillnk.yaml"),
+	if err := os.WriteFile(filepath.Join(checkout, "skink.yaml"),
 		[]byte("imports:\n  - url: github.com/acme/team\n"),
 		0o644); err != nil {
 		t.Fatal(err)
 	}
-	importDir := filepath.Join(home, ".skillnk", "github.com", "acme", "team")
+	importDir := filepath.Join(home, ".skink", "github.com", "acme", "team")
 	if err := os.MkdirAll(filepath.Join(importDir, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestFirstRunViaInstall(t *testing.T) {
 	p.textAnswers = []string{"git@example:me/skills.git"}
 	p.multiAnswers = [][]int{{0}}
 	_ = run(t, app, "install")
-	if _, err := os.Stat(filepath.Join(home, ".skillnk", "config.yaml")); err != nil {
+	if _, err := os.Stat(filepath.Join(home, ".skink", "config.yaml")); err != nil {
 		t.Errorf("config not written: %v", err)
 	}
 }

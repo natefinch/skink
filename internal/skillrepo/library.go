@@ -8,16 +8,16 @@ import (
 	"sort"
 )
 
-// Library is the full set of skill sources available to skillnk: the user's
+// Library is the full set of skill sources available to skink: the user's
 // primary skills checkout plus any imports declared in its config file.
 type Library struct {
 	Primary Repo
 	Sources []Source
 }
 
-// Source is one external repo managed by skillnk — a unique clone on disk.
+// Source is one external repo managed by skink — a unique clone on disk.
 // Multiple imports can resolve to the same Source (for example, two
-// imports with different `dir` selectors but the same `url`); they are
+// imports with different `dirs` selectors but the same `url`); they are
 // merged into a single Source with one Imports entry per original import.
 type Source struct {
 	URL     GitURL
@@ -26,7 +26,7 @@ type Source struct {
 	Repo    Repo
 }
 
-// NewLibrary constructs a Library for the given skillnk home dir. Imports
+// NewLibrary constructs a Library for the given skink home dir. Imports
 // are read from the primary repo's config file. Imports of imports are not
 // followed.
 func NewLibrary(home string, git GitRunner) (Library, error) {
@@ -36,13 +36,13 @@ func NewLibrary(home string, git GitRunner) (Library, error) {
 	if !primary.Exists() {
 		return lib, nil
 	}
-	imports, err := ReadImports(primaryDir)
+	cfg, err := ReadImports(primaryDir)
 	if err != nil {
 		return lib, err
 	}
 
 	byDir := map[string]int{} // clone dir -> index into lib.Sources
-	for _, imp := range imports {
+	for _, imp := range cfg.Imports {
 		u, err := ParseGitURL(imp.URL)
 		if err != nil {
 			return lib, err
@@ -133,10 +133,10 @@ func (l Library) PullAll(ctx context.Context) error {
 // behavior).
 //
 // Then, for each Source in declaration order, each of its Imports is
-// expanded against the on-disk clone: ``dir: foo`` produces one skill at
-// ``<clone>/foo``, ``dir: foo/*`` or the default produces one skill for
+// expanded against the on-disk clone: `dirs: [foo]` produces one skill at
+// `<clone>/foo`, `dirs: [foo/*]` or the default produces one skill for
 // every immediate subdirectory. Imported skills carry an InstallSubpath of
-// ``<host>/<path>/<skill-subpath>`` so different sources don't collide.
+// `<host>/<path>/<skill-subpath>` so different sources don't collide.
 //
 // If a Source's repo isn't cloned yet (or a referenced subdirectory
 // doesn't exist), its skills are silently skipped — run EnsureCloned first
@@ -162,22 +162,24 @@ func (l Library) ListAll() ([]Skill, error) {
 		}
 		basePath := filepath.Join(src.URL.CloneDirSegments()...)
 		for _, imp := range src.Imports {
-			sel, err := ParseDir(imp.Dir)
-			if err != nil {
-				return nil, err
-			}
-			skills, err := expandSelector(src.Repo.Dir, sel)
-			if err != nil {
-				return nil, err
-			}
-			for _, rs := range skills {
-				sub := filepath.FromSlash(rs.subpath)
-				out = append(out, Skill{
-					Name:           rs.name,
-					Path:           rs.path,
-					Source:         src.URL.DisplayPath(),
-					InstallSubpath: filepath.Join(basePath, sub),
-				})
+			for _, dir := range importDirs(imp) {
+				sel, err := ParseDir(dir)
+				if err != nil {
+					return nil, err
+				}
+				skills, err := expandSelector(src.Repo.Dir, sel)
+				if err != nil {
+					return nil, err
+				}
+				for _, rs := range skills {
+					sub := filepath.FromSlash(rs.subpath)
+					out = append(out, Skill{
+						Name:           rs.name,
+						Path:           rs.path,
+						Source:         src.URL.DisplayPath(),
+						InstallSubpath: filepath.Join(basePath, sub),
+					})
+				}
 			}
 		}
 	}

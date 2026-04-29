@@ -15,13 +15,13 @@ func TestResolve(t *testing.T) {
 	if l.Home != "/u/me" {
 		t.Errorf("home = %q", l.Home)
 	}
-	if l.SkillnkHome != filepath.Join("/u/me", ".skillnk") {
-		t.Errorf("skillnk home = %q", l.SkillnkHome)
+	if l.SkinkHome != filepath.Join("/u/me", ".skink") {
+		t.Errorf("skink home = %q", l.SkinkHome)
 	}
-	if l.Checkout != filepath.Join("/u/me", ".skillnk", "repo") {
+	if l.Checkout != filepath.Join("/u/me", ".skink", "repo") {
 		t.Errorf("checkout = %q", l.Checkout)
 	}
-	if l.Config != filepath.Join("/u/me", ".skillnk", "config.yaml") {
+	if l.Config != filepath.Join("/u/me", ".skink", "config.yaml") {
 		t.Errorf("config = %q", l.Config)
 	}
 }

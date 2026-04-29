@@ -13,11 +13,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Import is one external skills source declared in a skillnk config file.
+// Import is one external skills source declared in a skink config file.
 // Each Import identifies a git repo (via URL) and optionally narrows the
-// set of skills to pick up via Dir.
+// set of skills to pick up via Dirs.
 //
-// Dir accepts these forms:
+// Each entry in Dirs accepts these forms:
 //
 //   - "" or "*": every top-level directory of the repo is a skill (default)
 //   - "some/dir": a single skill directory at that path, with optional
@@ -26,12 +26,17 @@ import (
 //
 // Version optionally pins the clone to a specific git ref.
 type Import struct {
-	URL     string `yaml:"url"     json:"url"     toml:"url"`
-	Dir     string `yaml:"dir"     json:"dir"     toml:"dir"`
-	Version string `yaml:"version" json:"version" toml:"version"`
+	URL     string   `yaml:"url"     json:"url"     toml:"url"`
+	Dirs    []string `yaml:"dirs"    json:"dirs"    toml:"dirs"`
+	Version string   `yaml:"version" json:"version" toml:"version"`
 }
 
-// DirSelector is the parsed form of Import.Dir.
+// Config is the top-level skink config file format.
+type Config struct {
+	Imports []Import `yaml:"imports" json:"imports" toml:"imports"`
+}
+
+// DirSelector is the parsed form of one Import.Dirs entry.
 //
 //	Prefix       Wildcard  meaning
 //	""           true      all top-level dirs of the repo are skills
@@ -42,7 +47,7 @@ type DirSelector struct {
 	Wildcard bool
 }
 
-// ParseDir normalizes the raw dir string from an Import.
+// ParseDir normalizes one raw dir string from an Import.
 func ParseDir(raw string) (DirSelector, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" || s == "*" || s == "/" {
@@ -70,24 +75,19 @@ func ParseDir(raw string) (DirSelector, error) {
 	return DirSelector{Prefix: clean, Wildcard: wildcard}, nil
 }
 
-type repoConfigFile struct {
-	Imports []Import `yaml:"imports" json:"imports" toml:"imports"`
-}
-
-// configFileNames is the ordered list of accepted skillnk config filenames in
+// configFileNames is the ordered list of accepted skink config filenames in
 // the root of a skills repo. If more than one exists, the first match wins.
 var configFileNames = []string{
-	"skillnk.yaml",
-	"skillnk.yml",
-	"skillnk.json",
-	"skillnk.toml",
+	"skink.yaml",
+	"skink.yml",
+	"skink.json",
+	"skink.toml",
 }
 
-// ReadImports reads the skillnk config from the root of repoDir and returns
-// the normalized list of imports. Returns (nil, nil) if no config file is
-// present.
-func ReadImports(repoDir string) ([]Import, error) {
-	var cfg repoConfigFile
+// ReadImports reads the skink config from the root of repoDir and returns
+// the normalized config. Returns a zero Config if no config file is present.
+func ReadImports(repoDir string) (Config, error) {
+	var cfg Config
 	var found string
 	for _, name := range configFileNames {
 		p := filepath.Join(repoDir, name)
@@ -96,45 +96,55 @@ func ReadImports(repoDir string) ([]Import, error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("skillrepo: read %s: %w", p, err)
+			return Config{}, fmt.Errorf("skillrepo: read %s: %w", p, err)
 		}
 		switch filepath.Ext(name) {
 		case ".yaml", ".yml":
 			if err := yaml.Unmarshal(b, &cfg); err != nil {
-				return nil, fmt.Errorf("skillrepo: parse %s: %w", p, err)
+				return Config{}, fmt.Errorf("skillrepo: parse %s: %w", p, err)
 			}
 		case ".json":
 			if err := json.Unmarshal(b, &cfg); err != nil {
-				return nil, fmt.Errorf("skillrepo: parse %s: %w", p, err)
+				return Config{}, fmt.Errorf("skillrepo: parse %s: %w", p, err)
 			}
 		case ".toml":
 			if err := toml.Unmarshal(b, &cfg); err != nil {
-				return nil, fmt.Errorf("skillrepo: parse %s: %w", p, err)
+				return Config{}, fmt.Errorf("skillrepo: parse %s: %w", p, err)
 			}
 		}
 		found = p
 		break
 	}
 	if found == "" {
-		return nil, nil
+		return Config{}, nil
 	}
 	out := make([]Import, 0, len(cfg.Imports))
 	for i, imp := range cfg.Imports {
 		if strings.TrimSpace(imp.URL) == "" {
-			return nil, fmt.Errorf("skillrepo: %s: imports[%d]: url is required", found, i)
+			return Config{}, fmt.Errorf("skillrepo: %s: imports[%d]: url is required", found, i)
 		}
 		if _, err := ParseGitURL(imp.URL); err != nil {
-			return nil, fmt.Errorf("skillrepo: %s: imports[%d]: %w", found, i, err)
+			return Config{}, fmt.Errorf("skillrepo: %s: imports[%d]: %w", found, i, err)
 		}
-		if _, err := ParseDir(imp.Dir); err != nil {
-			return nil, fmt.Errorf("skillrepo: %s: imports[%d]: %w", found, i, err)
+		for j, dir := range importDirs(imp) {
+			if _, err := ParseDir(dir); err != nil {
+				return Config{}, fmt.Errorf("skillrepo: %s: imports[%d].dirs[%d]: %w", found, i, j, err)
+			}
 		}
 		out = append(out, imp)
 	}
-	return out, nil
+	cfg.Imports = out
+	return cfg, nil
 }
 
-// GitURL is a parsed git clone URL, split into the components skillnk uses
+func importDirs(imp Import) []string {
+	if len(imp.Dirs) == 0 {
+		return []string{""}
+	}
+	return imp.Dirs
+}
+
+// GitURL is a parsed git clone URL, split into the components skink uses
 // to decide where to clone the repo and lay out skills on disk.
 type GitURL struct {
 	// Host is the server hostname ("github.com", "example.com", ...).
@@ -142,7 +152,7 @@ type GitURL struct {
 	// Path is the repo path on the server with leading/trailing "/" and a
 	// trailing ".git" stripped. E.g. "my-org/my-repo".
 	Path string
-	// Original is the URL as the user wrote it; this is what skillnk
+	// Original is the URL as the user wrote it; this is what skink
 	// passes to `git clone` so the user's chosen protocol and credentials
 	// keep working.
 	Original string
@@ -250,7 +260,7 @@ func (g GitURL) CloneURL() string {
 }
 
 // CloneDirSegments returns the path segments that identify this repo on
-// disk under ~/.skillnk and under a client's skills directory: the host
+// disk under ~/.skink and under a client's skills directory: the host
 // followed by each path segment.
 func (g GitURL) CloneDirSegments() []string {
 	segs := []string{g.Host}

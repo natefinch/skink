@@ -34,7 +34,7 @@ func (g *libFakeGit) Run(ctx context.Context, dir string, args ...string) error 
 	return nil
 }
 
-// seedPrimary creates ~/.skillnk/repo with a .git dir, a list of top-level
+// seedPrimary creates ~/.skink/repo with a .git dir, a list of top-level
 // skill dirs, and an optional config file.
 func seedPrimary(t *testing.T, home string, skills []string, configBody, configName string) string {
 	t.Helper()
@@ -68,13 +68,15 @@ func TestNewLibraryMergesImportsBySharedClone(t *testing.T) {
 	seedPrimary(t, home, nil, `
 imports:
   - url: github.com/anthropics/skills
-    dir: skills/skill-creator
+    dirs:
+      - skills/skill-creator
     version: v1
   - url: https://github.com/anthropics/skills.git
-    dir: skills/pdf
+    dirs:
+      - skills/pdf
     version: v1
   - url: git@github.com:me/other.git
-`, "skillnk.yaml")
+`, "skink.yaml")
 	lib, err := NewLibrary(home, &libFakeGit{})
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +104,14 @@ func TestNewLibraryVersionConflict(t *testing.T) {
 	seedPrimary(t, home, nil, `
 imports:
   - url: github.com/anthropics/skills
-    dir: skills/a
+    dirs:
+      - skills/a
     version: v1
   - url: github.com/anthropics/skills
-    dir: skills/b
+    dirs:
+      - skills/b
     version: v2
-`, "skillnk.yaml")
+`, "skink.yaml")
 	_, err := NewLibrary(home, &libFakeGit{})
 	if err == nil || !strings.Contains(err.Error(), "conflicting versions") {
 		t.Errorf("want conflict error, got %v", err)
@@ -119,12 +123,14 @@ func TestEnsureClonedAndCheckout(t *testing.T) {
 	seedPrimary(t, home, nil, `
 imports:
   - url: github.com/anthropics/skills
-    dir: skills/skill-creator
+    dirs:
+      - skills/skill-creator
     version: v1.2.3
   - url: github.com/anthropics/skills
-    dir: skills/pdf
+    dirs:
+      - skills/pdf
     version: v1.2.3
-`, "skillnk.yaml")
+`, "skink.yaml")
 	g := &libFakeGit{}
 	lib, err := NewLibrary(home, g)
 	if err != nil {
@@ -155,12 +161,12 @@ func TestListAllExpandsDirSelectors(t *testing.T) {
 	seedPrimary(t, home, []string{"primary-a", "primary-b"}, `
 imports:
   - url: github.com/anthropics/skills
-    dir: skills/skill-creator
-  - url: github.com/anthropics/skills
-    dir: skills/*
+    dirs:
+      - skills/skill-creator
+      - skills/*
   - url: git@example.com:my-org/my-repo
-    # no dir → all top-level dirs
-`, "skillnk.yaml")
+    # no dirs -> all top-level dirs
+`, "skink.yaml")
 
 	// Pre-populate clone dirs (EnsureCloned also does this via the fake,
 	// but we need specific subdir structure, so seed directly).
@@ -192,8 +198,8 @@ imports:
 	}
 
 	want := map[string]string{
-		"primary-a@":    "primary-a",
-		"primary-b@":    "primary-b",
+		"primary-a@": "primary-a",
+		"primary-b@": "primary-b",
 		// explicit single
 		"skill-creator@github.com/anthropics/skills": filepath.Join("github.com", "anthropics", "skills", "skills", "skill-creator"),
 		// wildcard expansion (includes skill-creator again since it's a subdir of skills/)
@@ -221,8 +227,9 @@ func TestListAllMissingSubdirIsIgnored(t *testing.T) {
 	seedPrimary(t, home, nil, `
 imports:
   - url: github.com/a/b
-    dir: missing/skill
-`, "skillnk.yaml")
+    dirs:
+      - missing/skill
+`, "skink.yaml")
 	anth := filepath.Join(home, "github.com", "a", "b")
 	must(t, os.MkdirAll(filepath.Join(anth, ".git"), 0o755))
 
@@ -246,7 +253,7 @@ imports:
   - url: github.com/a/pinned
     version: v1
   - url: github.com/a/unpinned
-`, "skillnk.yaml")
+`, "skink.yaml")
 	// Pre-clone both.
 	for _, p := range []string{"github.com/a/pinned", "github.com/a/unpinned"} {
 		must(t, os.MkdirAll(filepath.Join(home, p, ".git"), 0o755))

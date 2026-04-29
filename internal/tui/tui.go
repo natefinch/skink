@@ -1,4 +1,4 @@
-// Package tui holds the Bubble Tea UI models used by skillnk. Each exported
+// Package tui holds the Bubble Tea UI models used by skink. Each exported
 // Run* function drives one interactive screen and returns the user's choice
 // or an error. Higher layers (cli) call these; lower layers (config,
 // installer, etc.) know nothing about this package.
@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 

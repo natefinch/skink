@@ -1,4 +1,4 @@
-# skillnk
+# skink
 
 A tiny CLI that links skills from your personal skills git repo into the AI
 client (Claude, Copilot, Cursor, Codex) a project uses. Skills live in one
@@ -7,41 +7,41 @@ place, are version-controlled, and are shared across projects via symlinks.
 ## Install
 
 ```
-go install github.com/natefinch/skillnk@latest
+go install github.com/natefinch/skink@latest
 ```
 
 Requires `git` on your `PATH`.
 
 ## First run
 
-On first run, skillnk asks for the URL of the git repo that holds your
-skills and clones it into `~/.skillnk/repo`. Config is saved to
-`~/.skillnk/config.yaml`.
+On first run, skink asks for the URL of the git repo that holds your
+skills and clones it into `~/.skink/repo`. Config is saved to
+`~/.skink/config.yaml`.
 
 ```
-$ skillnk init
+$ skink init
 ```
 
 A "skill" is any top-level directory in that repo (dotfiles and `.github`
 are ignored).
 
-## The `skillnk` config file
+## The `skink` config file
 
-Your skills repo may include a `skillnk` config file at its root, which
+Your skills repo may include a `skink` config file at its root, which
 declares additional skills sources via a single `imports:` list. Each
 import is one git repo; by default every top-level directory is treated
-as a skill, but you can narrow it down to a single directory or wildcard
-subtree with `dir:`.
+as a skill, but you can narrow it down to one or more directories or
+wildcard subtrees with `dirs:`.
 
 ### Location and format
 
 The file lives at the root of your skills repo and may be written in any of
 four formats. If multiple exist, this precedence applies (first match wins):
 
-1. `skillnk.yaml`
-2. `skillnk.yml`
-3. `skillnk.json`
-4. `skillnk.toml`
+1. `skink.yaml`
+2. `skink.yml`
+3. `skink.json`
+4. `skink.toml`
 
 ### Schema
 
@@ -50,10 +50,10 @@ One top-level key: `imports`, a list of objects.
 | field     | required | notes                                                                 |
 |-----------|----------|-----------------------------------------------------------------------|
 | `url`     | yes      | Any git URL `git clone` understands.                                  |
-| `dir`     | no       | Which directory(ies) of the repo to treat as skills. Defaults to `*`. |
+| `dirs`    | no       | Which directories of the repo to treat as skills. Defaults to `*`.    |
 | `version` | no       | Pin to a specific git ref — tag, branch, or commit SHA.               |
 
-`dir` accepts:
+Each `dirs` entry accepts:
 
 - omitted or `*` — every top-level directory of the repo is a skill.
 - `some/path` (with optional trailing `/`) — a single skill directory at
@@ -65,16 +65,16 @@ are rejected.
 
 ### URL handling
 
-skillnk accepts the usual git URL forms — `https://`, `http://`, `ssh://`,
+skink accepts the usual git URL forms — `https://`, `http://`, `ssh://`,
 `git://`, scp-style `user@host:path`, and bare `host/path`. The URL is
 passed through to `git clone` unchanged, so your existing SSH keys or
 credential helpers keep working.
 
 Both the on-disk clone and the install path under your project mirror the
 URL structure. For example, with
-`url: git@example.com:my-org/my-repo` and `dir: skills/do-the-thing`:
+`url: git@example.com:my-org/my-repo` and `dirs: [skills/do-the-thing]`:
 
-- Cloned to: `~/.skillnk/example.com/my-org/my-repo/`
+- Cloned to: `~/.skink/example.com/my-org/my-repo/`
 - Installed to: `.github/skills/example.com/my-org/my-repo/skills/do-the-thing/`
   (and the equivalent under `.claude/skills/`, `.codex/skills/`, etc.)
 
@@ -85,10 +85,10 @@ disk, and makes it obvious where each one came from.
 
 - If multiple imports point at the same repo, the clone is shared. An
   error is raised if they disagree on `version`.
-- `skillnk update` runs `git pull --ff-only` on the primary checkout and
+- `skink update` runs `git pull --ff-only` on the primary checkout and
   on every unpinned source. Pinned sources get `git fetch --tags`
   followed by `git checkout <version>`.
-- Imports are **not transitive**: a `skillnk` config inside an imported
+- Imports are **not transitive**: a `skink` config inside an imported
   repo is ignored.
 - Primary-repo skills (in your own personal skills repo) are still
   installed with flat names (`.github/skills/<skill>/`). The URL
@@ -97,16 +97,18 @@ disk, and makes it obvious where each one came from.
 ### Examples
 
 ```yaml
-# skillnk.yaml
+# skink.yaml
 imports:
   # Pull a single skill at a known path, pinned.
   - url: github.com/anthropics/skills
-    dir: skills/skill-creator
+    dirs:
+      - skills/skill-creator
     version: v0.3.0
 
   # Pull every skill under a subdirectory.
   - url: github.com/anthropics/skills
-    dir: skills/*
+    dirs:
+      - skills/*
 
   # Pull every top-level directory of a private repo.
   - url: git@example.com:my-org/my-repo
@@ -119,8 +121,8 @@ imports:
 ```json
 {
   "imports": [
-    { "url": "github.com/anthropics/skills", "dir": "skills/skill-creator", "version": "v0.3.0" },
-    { "url": "github.com/anthropics/skills", "dir": "skills/*" },
+    { "url": "github.com/anthropics/skills", "dirs": ["skills/skill-creator"], "version": "v0.3.0" },
+    { "url": "github.com/anthropics/skills", "dirs": ["skills/*"] },
     { "url": "git@example.com:my-org/my-repo", "version": "v1.4.0" },
     { "url": "https://github.com/charmbracelet/skills.git" }
   ]
@@ -128,15 +130,15 @@ imports:
 ```
 
 ```toml
-# skillnk.toml
+# skink.toml
 [[imports]]
 url     = "github.com/anthropics/skills"
-dir     = "skills/skill-creator"
+dirs    = ["skills/skill-creator"]
 version = "v0.3.0"
 
 [[imports]]
 url = "github.com/anthropics/skills"
-dir = "skills/*"
+dirs = ["skills/*"]
 
 [[imports]]
 url     = "git@example.com:my-org/my-repo"
@@ -160,13 +162,13 @@ url = "https://github.com/charmbracelet/skills.git"
 Non-interactive use:
 
 ```
-skillnk install --client=claude --skill=foo --skill=bar
-skillnk uninstall --client=claude --skill=foo
+skink install --client=claude --skill=foo --skill=bar
+skink uninstall --client=claude --skill=foo
 ```
 
 ## Client detection
 
-skillnk looks for these marker directories in the project root and installs
+skink looks for these marker directories in the project root and installs
 into the matching skills dir:
 
 | client  | marker     | install target          |
@@ -176,7 +178,7 @@ into the matching skills dir:
 | cursor  | `.cursor`  | `.cursor/skills/<name>` |
 | codex   | `.codex`   | `.codex/skills/<name>`  |
 
-With zero matches, skillnk prompts. With multiple matches, it prompts with
+With zero matches, skink prompts. With multiple matches, it prompts with
 the subset. `--client` overrides detection.
 
 ## Development
@@ -191,8 +193,8 @@ Layout:
 
 ```
 internal/
-  paths/      resolve home, ~/.skillnk, project root (pure)
-  config/     load/save ~/.skillnk/config.yaml (pure)
+  paths/      resolve home, ~/.skink, project root (pure)
+  config/     load/save ~/.skink/config.yaml (pure)
   client/     client registry + auto-detect (pure)
   skillrepo/  clone/pull/list skills via injected GitRunner (pure)
   installer/  symlink create/remove/status (pure)
