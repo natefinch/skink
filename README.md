@@ -1,5 +1,9 @@
 # skink
 
+<img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/c3c5610f-3a18-46df-8d00-7790860748e1" />
+
+
+
 A tiny CLI for working with AI-client skills declared by the current project.
 Projects commit a `skink` config file that names external skills repositories;
 skink clones and updates those sources in a shared local cache.
