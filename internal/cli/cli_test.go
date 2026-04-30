@@ -83,7 +83,10 @@ type fakePrompter struct {
 	browseErrors  []error
 	browseItems   []tui.BrowseItem
 	statusActions []tui.StatusAction
+	statusInitial []tui.StatusSnapshot
 	statusItems   []tui.StatusSnapshot
+	statusApplies int
+	onStatusStart func(tui.StatusSnapshot)
 }
 
 func (f *fakePrompter) Text(title, prompt, placeholder string) (string, error) {
@@ -121,7 +124,14 @@ func (f *fakePrompter) BrowseSkills(title string, items []tui.BrowseItem) ([]int
 	return ans, nil
 }
 
-func (f *fakePrompter) Status(title string, snapshot tui.StatusSnapshot) (tui.StatusAction, error) {
+func (f *fakePrompter) Status(title string, snapshot tui.StatusSnapshot, update func() tui.StatusSnapshot, addRepo tui.StatusAddRepoFunc) (tui.StatusAction, error) {
+	f.statusInitial = append(f.statusInitial, snapshot)
+	if f.onStatusStart != nil {
+		f.onStatusStart(snapshot)
+	}
+	if update != nil {
+		snapshot = update()
+	}
 	f.statusItems = append(f.statusItems, snapshot)
 	if len(f.statusActions) == 0 {
 		return tui.StatusAction{Kind: tui.StatusActionQuit}, nil
@@ -129,6 +139,37 @@ func (f *fakePrompter) Status(title string, snapshot tui.StatusSnapshot) (tui.St
 	ans := f.statusActions[0]
 	f.statusActions = f.statusActions[1:]
 	return ans, nil
+}
+
+func (f *fakePrompter) InteractiveStatus(
+	title string,
+	snapshot tui.StatusSnapshot,
+	update func() tui.StatusSnapshot,
+	addRepo tui.StatusAddRepoFunc,
+	apply tui.StatusApplyFunc,
+) error {
+	f.statusInitial = append(f.statusInitial, snapshot)
+	if f.onStatusStart != nil {
+		f.onStatusStart(snapshot)
+	}
+	if update != nil {
+		snapshot = update()
+	}
+	f.statusItems = append(f.statusItems, snapshot)
+	for len(f.statusActions) > 0 {
+		action := f.statusActions[0]
+		f.statusActions = f.statusActions[1:]
+		if action.Kind == "" || action.Kind == tui.StatusActionQuit {
+			return nil
+		}
+		next, err := apply(action)
+		if err != nil {
+			return err
+		}
+		f.statusApplies++
+		f.statusItems = append(f.statusItems, next)
+	}
+	return nil
 }
 
 type testEnv struct{ home, wd string }
@@ -197,12 +238,12 @@ func TestRootRegistersCurrentCommands(t *testing.T) {
 	for _, cmd := range root.Commands() {
 		commands[cmd.Name()] = true
 	}
-	for _, name := range []string{"status", "sync"} {
+	for _, name := range []string{"sync"} {
 		if !commands[name] {
 			t.Fatalf("missing command %q", name)
 		}
 	}
-	for _, name := range []string{"browse", "completion", "init", "install", "list", "uninstall", "update"} {
+	for _, name := range []string{"browse", "completion", "init", "install", "list", "status", "uninstall", "update"} {
 		if commands[name] {
 			t.Fatalf("obsolete command %q is still registered", name)
 		}
@@ -238,7 +279,7 @@ imports:
 		t.Fatal(err)
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.statusItems) != 1 {
@@ -261,6 +302,47 @@ imports:
 		if want[skill.Path] != skill.Status {
 			t.Fatalf("skill status for %s = %q want %q; all=%+v", skill.Path, skill.Status, want[skill.Path], got)
 		}
+	}
+}
+
+func TestStatusStartsBeforeRemoteRepoChecks(t *testing.T) {
+	app, home, proj, g, p, _ := setup(t)
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - alpha
+    version: v1.0.0
+`)
+	importDir := seedImport(t, home, "github.com", "acme", "team")
+	if err := os.MkdirAll(filepath.Join(importDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(importDir, "alpha", "SKILL.md"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g.outputs = map[string]string{
+		tagOutputKey(importDir): "v1.1.0\x002026-01-02T00:00:00Z\nv1.0.0\x002026-01-01T00:00:00Z\n",
+	}
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	p.onStatusStart = func(snapshot tui.StatusSnapshot) {
+		if len(g.fetchDirs) != 0 {
+			t.Fatalf("remote checks started before initial status render: %v", g.fetchDirs)
+		}
+		if len(snapshot.Repos) != 1 || !snapshot.Repos[0].Checking {
+			t.Fatalf("initial status should mark repo as checking: %+v", snapshot.Repos)
+		}
+		if snapshot.Repos[0].Upgrade || len(snapshot.Repos[0].Tags) != 0 {
+			t.Fatalf("initial status should not wait for remote tag data: %+v", snapshot.Repos[0])
+		}
+	}
+
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statusItems) != 1 || p.statusItems[0].Repos[0].Checking || !p.statusItems[0].Repos[0].Upgrade {
+		t.Fatalf("updated status should include remote check result: %+v", p.statusItems)
 	}
 }
 
@@ -291,7 +373,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(proj, "skills", "alpha", "SKILL.md")); err != nil || string(got) != "alpha\n" {
@@ -332,7 +414,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.statusItems) != 2 || len(p.statusItems[1].Repos) != 0 {
@@ -377,7 +459,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(proj, "skills", "alpha", "SKILL.md")); err != nil {
@@ -408,16 +490,20 @@ imports:
 		}
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team"},
+		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{0, 1}},
 		{Kind: tui.StatusActionQuit},
 	}
-	p.browseAnswers = [][]int{{0, 1}}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.browseItems) != 2 || !p.browseItems[0].Selected || p.browseItems[1].Selected {
-		t.Fatalf("expected existing skill prechecked in browse UI: %+v", p.browseItems)
+	items := p.statusItems[0].Repos[0].BrowseItems
+	if len(items) != 2 || !items[0].Selected || items[1].Selected {
+		t.Fatalf("expected existing skill prechecked in status browse data: %+v", items)
+	}
+	skills := p.statusItems[0].Repos[0].Skills
+	if len(skills) != 1 || skills[0].Description != "alpha." {
+		t.Fatalf("expected status skill description from repo metadata: %+v", skills)
 	}
 	cfg, err := os.ReadFile(filepath.Join(proj, ".skink.yaml"))
 	if err != nil {
@@ -433,7 +519,7 @@ imports:
 }
 
 func TestStatusAddRepoActionPromptsAndBrowsesRepo(t *testing.T) {
-	app, home, proj, g, p, _ := setup(t)
+	app, home, proj, g, p, out := setup(t)
 	writeProjectConfig(t, proj, `
 skilldir: skills
 imports:
@@ -453,13 +539,11 @@ imports:
 		"beta/SKILL.md": "---\nname: beta\ndescription: Beta.\n---\n",
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionAddRepo},
+		{Kind: tui.StatusActionAddRepo, URL: "github.com/acme/new", Selected: []int{0}},
 		{Kind: tui.StatusActionQuit},
 	}
-	p.textAnswers = []string{"github.com/acme/new"}
-	p.browseAnswers = [][]int{{0}}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(g.cloneArgs) != 1 || strings.Join(g.cloneArgs[0], " ") != "clone --depth=1 https://github.com/acme/new.git new" {
@@ -475,6 +559,12 @@ imports:
 	}
 	if _, err := os.Stat(filepath.Join(proj, "skills", "beta", "SKILL.md")); err != nil {
 		t.Fatalf("expected selected skill to sync: %v", err)
+	}
+	if p.statusApplies != 1 {
+		t.Fatalf("expected add repo to apply inside one status TUI session, got %d applies", p.statusApplies)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("status add repo should not print outside the TUI:\n%s", out.String())
 	}
 }
 
@@ -503,7 +593,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := os.ReadFile(filepath.Join(proj, ".skink.yaml"))
@@ -541,7 +631,7 @@ imports:
 	}
 	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos) != 1 {
@@ -578,7 +668,7 @@ imports:
 	}
 	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos) != 1 {
@@ -624,7 +714,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(g.checkoutRefs) == 0 || g.checkoutRefs[len(g.checkoutRefs)-1] != "v1.2.0" {
@@ -657,7 +747,7 @@ imports:
 		{Kind: tui.StatusActionQuit},
 	}
 
-	if err := run(t, app, "status"); err != nil {
+	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
 	if len(g.pullDirs) == 0 || g.pullDirs[len(g.pullDirs)-1] != importDir {

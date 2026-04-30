@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -168,6 +169,79 @@ func TestBrowseModelToggleExpandAndEnter(t *testing.T) {
 	}
 }
 
+func TestBrowseModelWrapsExpandedDescription(t *testing.T) {
+	m := newBrowseModel("", []BrowseItem{{
+		Name:        "alpha",
+		Path:        "skills/alpha",
+		Description: "first second third fourth",
+	}}, 24, 0)
+	m.expanded[0] = true
+
+	content := m.View().Content
+	if !strings.Contains(content, "      first second third") || !strings.Contains(content, "      fourth") {
+		t.Fatalf("expanded description should wrap to the view width:\n%s", content)
+	}
+	if strings.Contains(content, "first second third fourth") {
+		t.Fatalf("expanded description should not run past the view width:\n%s", content)
+	}
+}
+
+func TestBrowseViewUsesStatusShell(t *testing.T) {
+	m := browseModel{
+		title:    "Select skills to add:",
+		items:    []BrowseItem{{Name: "alpha", Path: "skills/alpha"}},
+		selected: map[int]bool{},
+		expanded: map[int]bool{},
+	}
+	view := m.View()
+	if !view.AltScreen {
+		t.Fatal("browse view should use alt screen for in-place refresh")
+	}
+	if !strings.Contains(view.Content, "███████╗") || !strings.Contains(view.Content, "Run skink -h to show command line usage.") {
+		t.Fatalf("browse view missing status header:\n%s", view.Content)
+	}
+	if !strings.Contains(view.Content, "Select skills to add:") || !strings.Contains(view.Content, "skills/alpha") {
+		t.Fatalf("browse view missing picker content:\n%s", view.Content)
+	}
+}
+
+func TestBrowseViewScrollsWithinTerminalHeight(t *testing.T) {
+	items := make([]BrowseItem, 8)
+	for i := range items {
+		name := fmt.Sprintf("skill-%02d", i)
+		items[i] = BrowseItem{Name: name, Path: "skills/" + name}
+	}
+	m := browseModel{
+		title:    "Select skills to add:",
+		items:    items,
+		selected: map[int]bool{},
+		expanded: map[int]bool{},
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 17})
+	m = next.(browseModel)
+	content := m.View().Content
+	if !strings.Contains(content, "↓ more skills") {
+		t.Fatalf("browse view should indicate hidden rows below:\n%s", content)
+	}
+	for range 7 {
+		next, _ = m.Update(keyMsg("down"))
+		m = next.(browseModel)
+	}
+	content = m.View().Content
+	if strings.Contains(content, "skills/skill-00") {
+		t.Fatalf("scrolled browse view should hide rows above the window:\n%s", content)
+	}
+	if !strings.Contains(content, "skills/skill-07") {
+		t.Fatalf("scrolled browse view should keep the cursor row visible:\n%s", content)
+	}
+	if !strings.Contains(content, "↑ more skills") {
+		t.Fatalf("browse view should indicate hidden rows above:\n%s", content)
+	}
+	if got := strings.Count(content, "\n") + 1; got > m.height {
+		t.Fatalf("browse view height = %d, want at most %d:\n%s", got, m.height, content)
+	}
+}
+
 func TestBrowseModelEmptyEnterRejected(t *testing.T) {
 	m := browseModel{
 		items:    []BrowseItem{{Name: "alpha", Path: "skills/alpha"}},
@@ -290,7 +364,7 @@ func TestStatusModelRepoActions(t *testing.T) {
 		Upgrade: true,
 		Tags:    []StatusTag{{Name: "v1.1.0"}, {Name: "v1.0.0"}},
 		Skills:  []StatusSkill{{ID: "skill", Name: "alpha", Path: "skills/alpha", Status: "missing"}},
-	}}})
+	}}}, nil)
 	next, _ := m.Update(keyMsg("t"))
 	m = next.(statusModel)
 	if !m.tagSelect {
@@ -302,25 +376,238 @@ func TestStatusModelRepoActions(t *testing.T) {
 		t.Fatalf("tag action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}})
+	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
 	next, cmd = m.Update(keyMsg("u"))
 	m = next.(statusModel)
 	if cmd == nil || m.action.Kind != StatusActionNext || m.action.RepoID != "repo" {
 		t.Fatalf("next action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}})
+	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+		BrowseItems: []BrowseItem{
+			{Name: "alpha", Path: "alpha", Selected: true},
+			{Name: "beta", Path: "beta"},
+		},
+	}}}, nil)
 	next, cmd = m.Update(keyMsg("c"))
 	m = next.(statusModel)
-	if cmd == nil || m.action.Kind != StatusActionChooseSkills || m.action.RepoID != "repo" {
+	if cmd != nil || m.browse == nil {
+		t.Fatalf("choose skills should open embedded browse view: %+v cmd=%v", m, cmd)
+	}
+	next, cmd = m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if cmd == nil || m.action.Kind != StatusActionChooseSkills || m.action.RepoID != "repo" || len(m.action.Selected) != 1 || m.action.Selected[0] != 0 {
 		t.Fatalf("choose skills action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}})
+	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
 	next, cmd = m.Update(keyMsg("a"))
 	m = next.(statusModel)
-	if cmd == nil || m.action.Kind != StatusActionAddRepo {
+	if cmd == nil || m.addRepo == nil {
+		t.Fatalf("add repo should open embedded text prompt: %+v cmd=%v", m, cmd)
+	}
+	if view := m.View(); !view.AltScreen || !strings.Contains(view.Content, "Add skills repo") || !strings.Contains(view.Content, "Run skink -h") {
+		t.Fatalf("add repo view should use status shell:\n%+v", view)
+	}
+	m.addRepo.input.SetValue("github.com/acme/new")
+	next, cmd = m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if cmd == nil || m.action.Kind != StatusActionAddRepo || m.action.URL != "github.com/acme/new" {
 		t.Fatalf("add repo action = %+v cmd=%v", m.action, cmd)
+	}
+}
+
+func TestStatusModelAddRepoEscReturnsToStatusView(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	next, cmd := m.Update(keyMsg("a"))
+	m = next.(statusModel)
+	if cmd == nil || m.addRepo == nil {
+		t.Fatalf("add repo should open embedded text prompt: %+v cmd=%v", m, cmd)
+	}
+	next, cmd = m.Update(keyMsg("esc"))
+	m = next.(statusModel)
+	if cmd != nil || m.addRepo != nil || m.action.Kind != "" {
+		t.Fatalf("esc should return to status without quitting: %+v cmd=%v", m, cmd)
+	}
+}
+
+func TestStatusModelAddRepoAcceptsPaste(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	next, _ := m.Update(keyMsg("a"))
+	m = next.(statusModel)
+	next, _ = m.Update(tea.PasteMsg{Content: "github.com/acme/pasted"})
+	m = next.(statusModel)
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if cmd == nil || m.action.Kind != StatusActionAddRepo || m.action.URL != "github.com/acme/pasted" {
+		t.Fatalf("add repo pasted action = %+v cmd=%v", m.action, cmd)
+	}
+}
+
+func TestStatusModelAddRepoRunsInsideStatusView(t *testing.T) {
+	var gotURL string
+	var gotApply StatusAction
+	addRepo := func(rawURL string) (StatusAddRepoResult, error) {
+		gotURL = rawURL
+		return StatusAddRepoResult{
+			URL: rawURL,
+			Items: []BrowseItem{
+				{Name: "alpha", Path: "alpha", Selected: true},
+				{Name: "beta", Path: "beta"},
+			},
+		}, nil
+	}
+	apply := func(action StatusAction) (StatusSnapshot, error) {
+		gotApply = action
+		return StatusSnapshot{
+			Repos:   []StatusRepo{{ID: "github.com/acme/new", Name: "github.com/acme/new"}},
+			Message: "added skills from github.com/acme/new",
+		}, nil
+	}
+	m := newStatusModelWithApply("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil, addRepo, apply)
+	next, _ := m.Update(keyMsg("a"))
+	m = next.(statusModel)
+	m.addRepo.input.SetValue("github.com/acme/new")
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if cmd == nil || gotURL != "" || !strings.Contains(m.View().Content, "Cloning github.com/acme/new ...") {
+		t.Fatalf("add repo should show cloning status before command completes: gotURL=%q cmd=%v view=%s", gotURL, cmd, m.View().Content)
+	}
+	next, cmd = m.Update(cmd())
+	m = next.(statusModel)
+	if cmd != nil || gotURL != "github.com/acme/new" || m.addRepo != nil || m.browse == nil {
+		t.Fatalf("add repo result should open embedded browse: gotURL=%q model=%+v cmd=%v", gotURL, m, cmd)
+	}
+	next, cmd = m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if cmd == nil || !m.applying || m.browse != nil || gotApply.Kind != "" {
+		t.Fatalf("accepting add repo should apply in place: apply=%+v model=%+v cmd=%v", gotApply, m, cmd)
+	}
+	next, cmd = m.Update(cmd())
+	m = next.(statusModel)
+	if cmd != nil || m.applying || gotApply.Kind != StatusActionAddRepo || gotApply.URL != "github.com/acme/new" || len(gotApply.Selected) != 1 || gotApply.Selected[0] != 0 {
+		t.Fatalf("add repo apply = %+v model=%+v cmd=%v", gotApply, m, cmd)
+	}
+	if !strings.Contains(m.View().Content, "added skills from github.com/acme/new") || !strings.Contains(m.View().Content, "github.com/acme/new") {
+		t.Fatalf("add repo apply should refresh status view:\n%s", m.View().Content)
+	}
+}
+
+func TestStatusModelChooseSkillsEscReturnsToStatusView(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:          "repo",
+		Name:        "repo",
+		BrowseItems: []BrowseItem{{Name: "alpha", Path: "alpha"}},
+	}}}, nil)
+	next, cmd := m.Update(keyMsg("c"))
+	m = next.(statusModel)
+	if cmd != nil || m.browse == nil {
+		t.Fatalf("choose skills should open embedded browse view: %+v cmd=%v", m, cmd)
+	}
+	next, cmd = m.Update(keyMsg("esc"))
+	m = next.(statusModel)
+	if cmd != nil || m.browse != nil || m.action.Kind != "" {
+		t.Fatalf("esc should return to status without quitting: %+v cmd=%v", m, cmd)
+	}
+}
+
+func TestStatusModelWaitsForRepoChecksBeforeTagActions(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:       "repo",
+		Name:     "repo",
+		Version:  "v1.0.0",
+		Checking: true,
+	}}}, nil)
+	next, cmd := m.Update(keyMsg("t"))
+	m = next.(statusModel)
+	if cmd != nil || m.tagSelect || !strings.Contains(m.err, "still checking") {
+		t.Fatalf("tag action should wait for checks: %+v cmd=%v", m, cmd)
+	}
+
+	next, cmd = m.Update(keyMsg("u"))
+	m = next.(statusModel)
+	if cmd != nil || m.action.Kind != "" || !strings.Contains(m.err, "still checking") {
+		t.Fatalf("next action should wait for checks: %+v cmd=%v", m, cmd)
+	}
+}
+
+func TestStatusViewShowsCheckingAfterVersion(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:       "repo",
+		Name:     "repo",
+		Version:  "v1.0.0",
+		Checking: true,
+	}}}, nil)
+	content := m.View().Content
+	versionIndex := strings.Index(content, "(v1.0.0)")
+	checkingIndex := strings.Index(content, "checking...")
+	if versionIndex == -1 || checkingIndex == -1 {
+		t.Fatalf("status view missing version or checking text:\n%s", content)
+	}
+	if checkingIndex < versionIndex {
+		t.Fatalf("checking text should render after version:\n%s", content)
+	}
+}
+
+func TestStatusModelAppliesAsyncUpdate(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:       "repo",
+		Name:     "repo",
+		Version:  "v1.0.0",
+		Checking: true,
+	}}}, func() StatusSnapshot {
+		return StatusSnapshot{Repos: []StatusRepo{{
+			ID:      "repo",
+			Name:    "repo",
+			Version: "v1.0.0",
+			Upgrade: true,
+			Tags:    []StatusTag{{Name: "v1.1.0"}},
+		}}}
+	})
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("expected status update command")
+	}
+	next, _ := m.Update(cmd())
+	m = next.(statusModel)
+	if m.snapshot.Repos[0].Checking || !m.snapshot.Repos[0].Upgrade || m.snapshot.Repos[0].Tags[0].Name != "v1.1.0" {
+		t.Fatalf("snapshot not updated: %+v", m.snapshot.Repos)
+	}
+}
+
+func TestStatusViewUsesAltScreen(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+	}}}, nil)
+	view := m.View()
+	if !view.AltScreen {
+		t.Fatal("status view should use alt screen for in-place refresh")
+	}
+	if !strings.Contains(view.Content, "███████╗") || !strings.Contains(view.Content, "Run skink -h to show command line usage.") {
+		t.Fatalf("status view missing header:\n%s", view.Content)
+	}
+}
+
+func TestStatusViewHelpIsSplitByTopic(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+	}}}, nil)
+	content := m.View().Content
+	for _, want := range []string{
+		"move: ↑/↓ • q/esc quit",
+		"repo: a add repo, c choose skills, t choose tag, u update newest/head",
+		"skills: ←/→ collapse/expand, s sync/overwrite, d delete",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("status view help missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "headskill") {
+		t.Fatalf("status view help should separate repo and skills sections:\n%s", content)
 	}
 }
 
@@ -330,7 +617,7 @@ func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
 		Skills: []StatusSkill{
 			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
 		},
-	}}})
+	}}}, nil)
 	next, _ := m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, cmd := m.Update(keyMsg("s"))
@@ -344,7 +631,7 @@ func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
 		Skills: []StatusSkill{
 			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
 		},
-	}}})
+	}}}, nil)
 	next, _ = m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, cmd = m.Update(keyMsg("d"))
@@ -363,6 +650,77 @@ func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
 	m = next.(statusModel)
 	if cmd == nil || m.action.Kind != StatusActionDelete || m.action.SkillID != "alpha" {
 		t.Fatalf("delete action = %+v cmd=%v", m.action, cmd)
+	}
+}
+
+func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+		Skills: []StatusSkill{{
+			ID:          "alpha",
+			Name:        "alpha",
+			Path:        "skills/alpha",
+			Description: "first second third fourth",
+			Status:      "up to date",
+		}},
+	}}}, nil)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 24, Height: 20})
+	m = next.(statusModel)
+
+	content := m.View().Content
+	if strings.Contains(content, "first second") {
+		t.Fatalf("collapsed skill should hide description:\n%s", content)
+	}
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("right"))
+	m = next.(statusModel)
+	content = m.View().Content
+	if !strings.Contains(content, "▾") || !strings.Contains(content, "      first second third") || !strings.Contains(content, "      fourth") {
+		t.Fatalf("expanded skill should show wrapped description:\n%s", content)
+	}
+	if strings.Contains(content, "first second third fourth") {
+		t.Fatalf("expanded description should not run past the view width:\n%s", content)
+	}
+	next, _ = m.Update(keyMsg("left"))
+	m = next.(statusModel)
+	if content = m.View().Content; strings.Contains(content, "first second") {
+		t.Fatalf("left should collapse expanded skill description:\n%s", content)
+	}
+}
+
+func TestStatusModelDeleteAppliesInPlace(t *testing.T) {
+	var got StatusAction
+	apply := func(action StatusAction) (StatusSnapshot, error) {
+		got = action
+		return StatusSnapshot{
+			Repos:   []StatusRepo{{ID: "repo", Name: "repo"}},
+			Message: "deleted alpha",
+		}, nil
+	}
+	m := newStatusModelWithApply("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID: "repo",
+		Skills: []StatusSkill{
+			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
+		},
+	}}}, nil, nil, apply)
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("d"))
+	m = next.(statusModel)
+	next, cmd := m.Update(keyMsg("y"))
+	m = next.(statusModel)
+	if cmd == nil || !m.applying || m.confirmDelete || got.Kind != "" {
+		t.Fatalf("delete should start in-place apply: apply=%+v model=%+v cmd=%v", got, m, cmd)
+	}
+	next, cmd = m.Update(cmd())
+	m = next.(statusModel)
+	if cmd != nil || m.applying || got.Kind != StatusActionDelete || got.SkillID != "alpha" {
+		t.Fatalf("delete apply = %+v model=%+v cmd=%v", got, m, cmd)
+	}
+	if !strings.Contains(m.View().Content, "deleted alpha") {
+		t.Fatalf("delete should refresh status view:\n%s", m.View().Content)
 	}
 }
 

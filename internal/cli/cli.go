@@ -25,7 +25,14 @@ type Prompter interface {
 	Text(title, prompt, placeholder string) (string, error)
 	SingleSelect(title string, items []string) (int, error)
 	BrowseSkills(title string, items []tui.BrowseItem) ([]int, error)
-	Status(title string, snapshot tui.StatusSnapshot) (tui.StatusAction, error)
+	Status(title string, snapshot tui.StatusSnapshot, update func() tui.StatusSnapshot, addRepo tui.StatusAddRepoFunc) (tui.StatusAction, error)
+	InteractiveStatus(
+		title string,
+		snapshot tui.StatusSnapshot,
+		update func() tui.StatusSnapshot,
+		addRepo tui.StatusAddRepoFunc,
+		apply tui.StatusApplyFunc,
+	) error
 }
 
 type teaPrompter struct{}
@@ -39,8 +46,17 @@ func (teaPrompter) SingleSelect(title string, items []string) (int, error) {
 func (teaPrompter) BrowseSkills(title string, items []tui.BrowseItem) ([]int, error) {
 	return tui.RunBrowseSelect(title, items)
 }
-func (teaPrompter) Status(title string, snapshot tui.StatusSnapshot) (tui.StatusAction, error) {
-	return tui.RunStatus(title, snapshot)
+func (teaPrompter) Status(title string, snapshot tui.StatusSnapshot, update func() tui.StatusSnapshot, addRepo tui.StatusAddRepoFunc) (tui.StatusAction, error) {
+	return tui.RunStatus(title, snapshot, update, addRepo)
+}
+func (teaPrompter) InteractiveStatus(
+	title string,
+	snapshot tui.StatusSnapshot,
+	update func() tui.StatusSnapshot,
+	addRepo tui.StatusAddRepoFunc,
+	apply tui.StatusApplyFunc,
+) error {
+	return tui.RunInteractiveStatus(title, snapshot, update, addRepo, apply)
 }
 
 // App holds the injectable dependencies. Zero value is production-ready.
@@ -83,6 +99,8 @@ func (a *App) Root() *cobra.Command {
 	root := &cobra.Command{
 		Use:               "skink",
 		Short:             "Manage project-declared AI client skills",
+		Args:              cobra.NoArgs,
+		RunE:              func(cmd *cobra.Command, args []string) error { return a.runStatus(cmd.Context()) },
 		SilenceUsage:      true,
 		SilenceErrors:     false,
 		CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -96,7 +114,6 @@ func (a *App) Root() *cobra.Command {
 	}
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show git command output")
 	root.AddCommand(
-		a.cmdStatus(),
 		a.cmdSync(),
 	)
 	return root
@@ -125,27 +142,53 @@ func (a *App) projectLibrary(ctx context.Context) (skillrepo.Library, string, er
 }
 
 func (a *App) browseRepoWithTarget(ctx context.Context, skinkHome, projectRoot string, cfg skillrepo.Config, rawURL, targetRoot string) error {
-	gitURL, err := skillrepo.ParseGitURL(rawURL)
+	gitURL, repo, err := a.prepareRepo(ctx, skinkHome, rawURL)
 	if err != nil {
 		return err
-	}
-	repo := skillrepo.New(filepath.Join(append([]string{skinkHome}, gitURL.CloneDirSegments()...)...), a.Git)
-	if !repo.Exists() {
-		fmt.Fprintf(a.Out, "Cloning %s into %s ...\n", gitURL.CloneURL(), repo.Dir)
-		if err := repo.CloneShallow(ctx, gitURL.CloneURL()); err != nil {
-			return fmt.Errorf("clone: %w", err)
-		}
 	}
 	return a.browseSourceRepo(ctx, projectRoot, cfg, gitURL.Original, repo, targetRoot)
 }
 
+func (a *App) prepareRepo(ctx context.Context, skinkHome, rawURL string) (skillrepo.GitURL, skillrepo.Repo, error) {
+	gitURL, err := skillrepo.ParseGitURL(rawURL)
+	if err != nil {
+		return skillrepo.GitURL{}, skillrepo.Repo{}, err
+	}
+	repo := skillrepo.New(filepath.Join(append([]string{skinkHome}, gitURL.CloneDirSegments()...)...), a.Git)
+	if !repo.Exists() {
+		if err := repo.CloneShallow(ctx, gitURL.CloneURL()); err != nil {
+			return skillrepo.GitURL{}, skillrepo.Repo{}, fmt.Errorf("clone: %w", err)
+		}
+	}
+	return gitURL, repo, nil
+}
+
 func (a *App) browseSourceRepo(ctx context.Context, projectRoot string, cfg skillrepo.Config, rawURL string, repo skillrepo.Repo, targetRoot string) error {
-	discovered, err := skillrepo.DiscoverSkills(repo.Dir)
+	selection, err := sourceSkillSelectionFor(cfg, rawURL, repo)
 	if err != nil {
 		return err
 	}
-	if len(discovered) == 0 {
+	if len(selection.discovered) == 0 {
 		return fmt.Errorf("no SKILL.md files found in %s", repo.Dir)
+	}
+	idxs, err := a.Prompter.BrowseSkills("Select skills to add:", selection.items)
+	if err != nil {
+		return err
+	}
+	return a.applySourceSkillSelection(projectRoot, cfg, rawURL, targetRoot, selection, idxs)
+}
+
+type sourceSkillSelection struct {
+	discovered []skillrepo.DiscoveredSkill
+	knownDirs  []string
+	included   map[string]bool
+	items      []tui.BrowseItem
+}
+
+func sourceSkillSelectionFor(cfg skillrepo.Config, rawURL string, repo skillrepo.Repo) (sourceSkillSelection, error) {
+	discovered, err := skillrepo.DiscoverSkills(repo.Dir)
+	if err != nil {
+		return sourceSkillSelection{}, err
 	}
 	knownDirs := make([]string, len(discovered))
 	for i, s := range discovered {
@@ -161,19 +204,29 @@ func (a *App) browseSourceRepo(ctx context.Context, projectRoot string, cfg skil
 			Selected:    included[s.RelDir],
 		}
 	}
-	idxs, err := a.Prompter.BrowseSkills("Select skills to add:", items)
-	if err != nil {
-		return err
-	}
-	selected := make([]skillrepo.DiscoveredSkill, len(idxs))
+	return sourceSkillSelection{
+		discovered: discovered,
+		knownDirs:  knownDirs,
+		included:   included,
+		items:      items,
+	}, nil
+}
+
+func (a *App) applySourceSkillSelection(
+	projectRoot string,
+	cfg skillrepo.Config,
+	rawURL string,
+	targetRoot string,
+	selection sourceSkillSelection,
+	idxs []int,
+) error {
 	dirs := make([]string, len(idxs))
 	syncItems := make([]syncer.Item, len(idxs))
 	for i, idx := range idxs {
-		if idx < 0 || idx >= len(discovered) {
+		if idx < 0 || idx >= len(selection.discovered) {
 			return fmt.Errorf("invalid selection %d", idx)
 		}
-		s := discovered[idx]
-		selected[i] = s
+		s := selection.discovered[idx]
 		dirs[i] = s.RelDir
 		syncItems[i] = syncer.Item{Name: s.Name, Source: s.Path}
 	}
@@ -182,8 +235,8 @@ func (a *App) browseSourceRepo(ctx context.Context, projectRoot string, cfg skil
 		selectedDirs[dir] = struct{}{}
 	}
 	var removed []string
-	for _, s := range discovered {
-		if !included[s.RelDir] {
+	for _, s := range selection.discovered {
+		if !selection.included[s.RelDir] {
 			continue
 		}
 		if _, ok := selectedDirs[s.RelDir]; ok {
@@ -192,21 +245,17 @@ func (a *App) browseSourceRepo(ctx context.Context, projectRoot string, cfg skil
 		removed = append(removed, s.Name)
 	}
 
-	cfg = skillrepo.UpdateImportDirs(cfg, rawURL, knownDirs, dirs)
+	cfg = skillrepo.UpdateImportDirs(cfg, rawURL, selection.knownDirs, dirs)
 	if err := skillrepo.SaveConfig(projectRoot, cfg); err != nil {
 		return err
 	}
-	removedPaths, err := removeSkillDirs(targetRoot, removed)
-	if err != nil {
+	if _, err := removeSkillDirs(targetRoot, removed); err != nil {
 		return err
 	}
 	result, err := syncer.Sync(syncItems, targetRoot, false)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(a.Out, "updated skink config with %d skill(s)\n", len(selected))
-	a.printSyncResult(projectRoot, result)
-	printPathList(a.Out, projectRoot, "removed:", removedPaths)
 	if len(result.Conflicts) > 0 {
 		return fmt.Errorf("sync conflicts: %d conflict(s); run skink sync -f to overwrite conflicting skill directories", len(result.Conflicts))
 	}
@@ -250,16 +299,6 @@ func (a *App) cmdSync() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite existing skill directories that differ from the cache")
 	return cmd
-}
-
-func (a *App) cmdStatus() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show whether configured skills are copied into the current project",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.runStatus(cmd.Context())
-		},
-	}
 }
 
 func syncItemsForSkills(skills []skillrepo.Skill) []syncer.Item {

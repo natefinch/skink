@@ -103,8 +103,9 @@ makes it obvious where each one came from.
   not changed unless `sync -f` is used.
 - `sync -f` overwrites conflicting destination skill directories so they exactly
   match the cached source, including removing extra files.
-- `skink status` lets you choose skills from configured repos or type a new repo
-  URL to add. It shallow-clones new repos into the shared
+- Running `skink` with no command opens a status TUI that lets you choose
+  skills from configured repos or type a new repo URL to add. It shallow-clones
+  new repos into the shared
   `~/.skink/<host>/<path>` cache if needed, scans for `SKILL.md` files, and
   shows an interactive expandable selector. Selected skills are added to the
   current project's config and copied into the repo using the same target
@@ -177,7 +178,7 @@ url = "https://github.com/charmbracelet/skills.git"
 
 ### Browsing skills
 
-From `skink status`, press `a` on a repo row to type a new repo URL and choose
+From the status TUI, press `a` on a repo row to type a new repo URL and choose
 skills from it, or press `c` to choose/change skills from that configured repo.
 The browse UI discovers skills by finding directories that contain `SKILL.md`.
 It reads `name` and `description` from YAML frontmatter:
@@ -206,9 +207,10 @@ from the local `skilldir`.
 
 ### Checking local status
 
-`skink status` opens an interactive status page. It reads the current repo's
-skink config, groups configured skills by source repo, and compares each source
-skill with the directory that should exist under `skilldir`.
+Running `skink` with no command opens an interactive status page. It reads the
+current repo's skink config, groups configured skills by source repo, and
+compares each source skill with the directory that should exist under
+`skilldir`.
 
 Each skill row shows a status emoji:
 
@@ -241,10 +243,10 @@ changes and refreshes statuses in place.
 
 ## Commands
 
-| command  | what it does                                                       |
-|----------|--------------------------------------------------------------------|
-| `status` | Open an interactive status page for configured skills.             |
-| `sync`   | Update configured sources and copy skills into the repo skilldir.  |
+| command | what it does                                                       |
+|---------|--------------------------------------------------------------------|
+| `skink` | Open an interactive status page for configured skills.             |
+| `sync`  | Update configured sources and copy skills into the repo skilldir.  |
 
 Use `sync -f` to force overwrite destination skill directories that differ from the
 cached source.
