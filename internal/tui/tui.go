@@ -28,6 +28,8 @@ var (
 	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
+const cursorMarker = "🦎 "
+
 // statusLogoLines is the multi-line "SKINK" banner. Each line is rendered with
 // its own color in renderStatusLogo to produce a vertical gradient that fades
 // from pink at the top to light blue at the bottom.
@@ -257,10 +259,7 @@ func (m multiModel) View() tea.View {
 		b.WriteString("\n\n")
 	}
 	for i, it := range m.items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = cursorStyle.Render("❯ ")
-		}
+		cursor := listCursor(i == m.cursor)
 		check := "[ ]"
 		if m.selected[i] {
 			check = selectStyle.Render("[x]")
@@ -328,10 +327,7 @@ func (m singleModel) View() tea.View {
 		b.WriteString("\n\n")
 	}
 	for i, it := range m.items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = cursorStyle.Render("❯ ")
-		}
+		cursor := listCursor(i == m.cursor)
 		fmt.Fprintf(&b, "%s%s\n", cursor, it)
 	}
 	b.WriteString("\n")
@@ -345,6 +341,7 @@ type BrowseItem struct {
 	Path        string
 	Description string
 	Selected    bool
+	SelectsAll  bool
 }
 
 // RunBrowseSelect shows an expandable multi-select list of discovered skills.
@@ -379,9 +376,10 @@ func newBrowseModel(title string, items []BrowseItem, width, height int) browseM
 	for i, item := range items {
 		if item.Selected {
 			m.selected[i] = true
-			m.initialSelected[i] = true
 		}
 	}
+	m.syncAllSelection()
+	m.rememberInitialSelection()
 	m.ensureCursorVisible()
 	return m
 }
@@ -451,7 +449,7 @@ func (m browseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "left", "h":
 			m.expanded[m.cursor] = false
 		case "space":
-			m.selected[m.cursor] = !m.selected[m.cursor]
+			m.toggleSelection(m.cursor)
 		case "enter":
 			m.done = true
 			return m, tea.Quit
@@ -468,6 +466,43 @@ func (m browseModel) selectionChanged() bool {
 		}
 	}
 	return false
+}
+
+func (m *browseModel) rememberInitialSelection() {
+	m.initialSelected = make(map[int]bool, len(m.selected))
+	for i, selected := range m.selected {
+		if selected {
+			m.initialSelected[i] = true
+		}
+	}
+}
+
+func (m *browseModel) toggleSelection(idx int) {
+	selected := !m.selected[idx]
+	m.selected[idx] = selected
+	if m.items[idx].SelectsAll {
+		for i := range m.items {
+			m.selected[i] = selected
+		}
+		return
+	}
+	for i, item := range m.items {
+		if item.SelectsAll && !selected {
+			m.selected[i] = false
+			return
+		}
+	}
+}
+
+func (m *browseModel) syncAllSelection() {
+	for i, item := range m.items {
+		if !item.SelectsAll || !m.selected[i] {
+			continue
+		}
+		for j := range m.items {
+			m.selected[j] = true
+		}
+	}
 }
 
 func (m browseModel) chosen() []int {
@@ -490,7 +525,7 @@ func (m browseModel) View() tea.View {
 	footer := m.browseFooter(scrollHint(start, end, len(lines)))
 
 	b.WriteString(header)
-	fmt.Fprintf(&b, "    %-*s  %s\n", nameWidth, "SKILL", "PATH")
+	fmt.Fprintf(&b, "        %-*s  %s\n", nameWidth, "SKILL", "PATH")
 	for _, line := range lines[start:end] {
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -517,10 +552,7 @@ func (m browseModel) browseNameWidth() int {
 func (m browseModel) browseLines(nameWidth int) []string {
 	var lines []string
 	for i, item := range m.items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = cursorStyle.Render("❯ ")
-		}
+		cursor := listCursor(i == m.cursor)
 		check := "[ ]"
 		if m.selected[i] {
 			check = selectStyle.Render("[x]")
@@ -1202,6 +1234,13 @@ func writeStatusHeader(b *strings.Builder, title string) {
 	b.WriteString(statusHeader(title))
 }
 
+func listCursor(selected bool) string {
+	if selected {
+		return cursorStyle.Render(cursorMarker)
+	}
+	return strings.Repeat(" ", lipgloss.Width(cursorMarker))
+}
+
 func (m statusModel) View() tea.View {
 	if m.addRepo != nil {
 		return newStatusView(m.addRepoView())
@@ -1220,10 +1259,7 @@ func (m statusModel) View() tea.View {
 	}
 	rowIndex := 0
 	for _, repo := range m.snapshot.Repos {
-		cursor := "  "
-		if rowIndex == m.cursor {
-			cursor = cursorStyle.Render("❯ ")
-		}
+		cursor := listCursor(rowIndex == m.cursor)
 		prefix := ""
 		suffix := ""
 		if repo.Upgrade {
@@ -1245,15 +1281,12 @@ func (m statusModel) View() tea.View {
 		}
 		rowIndex++
 		for _, skill := range repo.Skills {
-			cursor := "  "
-			if rowIndex == m.cursor {
-				cursor = cursorStyle.Render("❯ ")
-			}
+			cursor := listCursor(rowIndex == m.cursor)
 			twist := "▸"
 			if m.expanded[skill.ID] {
 				twist = "▾"
 			}
-			fmt.Fprintf(&b, "%s  %s %s %-18s %s\n", cursor, statusEmoji(skill.Status), twist, skill.Name, skill.Path)
+			fmt.Fprintf(&b, "%s  %s %s %-18s %s\n", cursor, paddedStatusEmoji(skill.Status), twist, skill.Name, skill.Path)
 			if m.expanded[skill.ID] {
 				desc := strings.TrimSpace(skill.Description)
 				if desc == "" {
@@ -1323,10 +1356,7 @@ func (m statusModel) tagSelectView() string {
 	repo, _ := m.currentRepo()
 	writeStatusHeader(&b, "Choose tag for "+repo.Name)
 	for i, tag := range repo.Tags {
-		cursor := "  "
-		if i == m.tagCursor {
-			cursor = cursorStyle.Render("❯ ")
-		}
+		cursor := listCursor(i == m.tagCursor)
 		created := tag.Created
 		if created != "" {
 			created = "  " + created
@@ -1336,6 +1366,17 @@ func (m statusModel) tagSelectView() string {
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("↑/↓ move • enter choose • esc back"))
 	return b.String()
+}
+
+func paddedStatusEmoji(status string) string {
+	emoji := statusEmoji(status)
+	if status == "different" {
+		emoji += " "
+	}
+	for lipgloss.Width(emoji) < 2 {
+		emoji += " "
+	}
+	return emoji
 }
 
 func statusEmoji(status string) string {

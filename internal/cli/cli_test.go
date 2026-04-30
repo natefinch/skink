@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/natefinch/skink/internal/skillrepo"
 	"github.com/natefinch/skink/internal/tui"
 )
 
@@ -490,7 +491,7 @@ imports:
 		}
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{0, 1}},
+		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{1, 2}},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -498,7 +499,7 @@ imports:
 		t.Fatal(err)
 	}
 	items := p.statusItems[0].Repos[0].BrowseItems
-	if len(items) != 2 || !items[0].Selected || items[1].Selected {
+	if len(items) != 3 || items[0].Name != "All skills" || items[0].Path != "*" || !items[1].Selected || items[2].Selected {
 		t.Fatalf("expected existing skill prechecked in status browse data: %+v", items)
 	}
 	skills := p.statusItems[0].Repos[0].Skills
@@ -515,6 +516,52 @@ imports:
 	}
 	if _, err := os.Stat(filepath.Join(proj, "skills", "beta", "SKILL.md")); err != nil {
 		t.Fatalf("expected selected skill to sync: %v", err)
+	}
+}
+
+func TestStatusChooseSkillsAllOptionWritesWildcard(t *testing.T) {
+	app, home, proj, _, p, _ := setup(t)
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - packs/alpha
+`)
+	importDir := seedImport(t, home, "github.com", "acme", "team")
+	for _, name := range []string{"alpha", "beta"} {
+		dir := filepath.Join(importDir, "packs", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf("---\nname: %s\ndescription: %s.\n---\n", name, name)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.statusActions = []tui.StatusAction{
+		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{0}},
+		{Kind: tui.StatusActionQuit},
+	}
+
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	items := p.statusItems[0].Repos[0].BrowseItems
+	if len(items) != 3 || items[0].Name != "All skills" || items[0].Path != "packs/*" {
+		t.Fatalf("expected all-skills wildcard row first: %+v", items)
+	}
+	cfg, err := skillrepo.ReadImports(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Imports) != 1 || strings.Join(cfg.Imports[0].Dirs, ",") != "packs/*" {
+		t.Fatalf("config should use wildcard selector: %+v", cfg.Imports)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(proj, "skills", name, "SKILL.md")); err != nil {
+			t.Fatalf("expected %s to sync from wildcard selection: %v", name, err)
+		}
 	}
 }
 

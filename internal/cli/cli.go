@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -183,6 +184,7 @@ type sourceSkillSelection struct {
 	knownDirs  []string
 	included   map[string]bool
 	items      []tui.BrowseItem
+	allDir     string
 }
 
 func sourceSkillSelectionFor(cfg skillrepo.Config, rawURL string, repo skillrepo.Repo) (sourceSkillSelection, error) {
@@ -195,21 +197,99 @@ func sourceSkillSelectionFor(cfg skillrepo.Config, rawURL string, repo skillrepo
 		knownDirs[i] = s.RelDir
 	}
 	included := skillrepo.IncludedDirs(cfg, rawURL, knownDirs)
-	items := make([]tui.BrowseItem, len(discovered))
-	for i, s := range discovered {
-		items[i] = tui.BrowseItem{
+	items := make([]tui.BrowseItem, 0, len(discovered)+1)
+	allDir, hasAllDir := allSkillsSelector(knownDirs)
+	if hasAllDir {
+		items = append(items, tui.BrowseItem{
+			Name:        "All skills",
+			Path:        allDir,
+			Description: "Select every skill in this repo.",
+			Selected:    selectorConfigured(cfg, rawURL, allDir),
+			SelectsAll:  true,
+		})
+	}
+	for _, s := range discovered {
+		items = append(items, tui.BrowseItem{
 			Name:        s.Name,
 			Path:        s.RelDir,
 			Description: s.Description,
 			Selected:    included[s.RelDir],
-		}
+		})
 	}
 	return sourceSkillSelection{
 		discovered: discovered,
 		knownDirs:  knownDirs,
 		included:   included,
 		items:      items,
+		allDir:     allDir,
 	}, nil
+}
+
+func allSkillsSelector(dirs []string) (string, bool) {
+	if len(dirs) == 0 {
+		return "", false
+	}
+	parent, ok := skillParentDir(dirs[0])
+	if !ok {
+		return "", false
+	}
+	for _, dir := range dirs[1:] {
+		next, ok := skillParentDir(dir)
+		if !ok || next != parent {
+			return "", false
+		}
+	}
+	if parent == "" {
+		return "*", true
+	}
+	return parent + "/*", true
+}
+
+func skillParentDir(dir string) (string, bool) {
+	dir = strings.Trim(filepath.ToSlash(dir), "/")
+	if dir == "" {
+		return "", false
+	}
+	parent := path.Dir(dir)
+	if parent == "." {
+		parent = ""
+	}
+	return parent, true
+}
+
+func selectorConfigured(cfg skillrepo.Config, rawURL, selector string) bool {
+	want, err := skillrepo.ParseDir(selector)
+	if err != nil {
+		return false
+	}
+	for _, imp := range cfg.Imports {
+		if !sameRepo(imp.URL, rawURL) {
+			continue
+		}
+		dirs := imp.Dirs
+		if len(dirs) == 0 {
+			dirs = []string{""}
+		}
+		for _, raw := range dirs {
+			got, err := skillrepo.ParseDir(raw)
+			if err == nil && got.Wildcard == want.Wildcard && got.Prefix == want.Prefix {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func sameRepo(a, b string) bool {
+	left, err := skillrepo.ParseGitURL(a)
+	if err != nil {
+		return false
+	}
+	right, err := skillrepo.ParseGitURL(b)
+	if err != nil {
+		return false
+	}
+	return left.DisplayPath() == right.DisplayPath()
 }
 
 func (a *App) applySourceSkillSelection(
@@ -220,19 +300,9 @@ func (a *App) applySourceSkillSelection(
 	selection sourceSkillSelection,
 	idxs []int,
 ) error {
-	dirs := make([]string, len(idxs))
-	syncItems := make([]syncer.Item, len(idxs))
-	for i, idx := range idxs {
-		if idx < 0 || idx >= len(selection.discovered) {
-			return fmt.Errorf("invalid selection %d", idx)
-		}
-		s := selection.discovered[idx]
-		dirs[i] = s.RelDir
-		syncItems[i] = syncer.Item{Name: s.Name, Source: s.Path}
-	}
-	selectedDirs := map[string]struct{}{}
-	for _, dir := range dirs {
-		selectedDirs[dir] = struct{}{}
+	dirs, syncItems, selectedDirs, err := selectedSkills(selection, idxs)
+	if err != nil {
+		return err
 	}
 	var removed []string
 	for _, s := range selection.discovered {
@@ -260,6 +330,46 @@ func (a *App) applySourceSkillSelection(
 		return fmt.Errorf("sync conflicts: %d conflict(s); run skink sync -f to overwrite conflicting skill directories", len(result.Conflicts))
 	}
 	return nil
+}
+
+func selectedSkills(
+	selection sourceSkillSelection,
+	idxs []int,
+) ([]string, []syncer.Item, map[string]struct{}, error) {
+	selectedDirs := map[string]struct{}{}
+	for _, idx := range idxs {
+		if idx == 0 && selection.allDir != "" {
+			for _, skill := range selection.discovered {
+				selectedDirs[skill.RelDir] = struct{}{}
+			}
+			return []string{selection.allDir}, syncItemsForDiscovered(selection.discovered), selectedDirs, nil
+		}
+	}
+
+	dirs := make([]string, len(idxs))
+	syncItems := make([]syncer.Item, len(idxs))
+	for i, idx := range idxs {
+		discoveredIdx := idx
+		if selection.allDir != "" {
+			discoveredIdx--
+		}
+		if discoveredIdx < 0 || discoveredIdx >= len(selection.discovered) {
+			return nil, nil, nil, fmt.Errorf("invalid selection %d", idx)
+		}
+		s := selection.discovered[discoveredIdx]
+		dirs[i] = s.RelDir
+		syncItems[i] = syncer.Item{Name: s.Name, Source: s.Path}
+		selectedDirs[s.RelDir] = struct{}{}
+	}
+	return dirs, syncItems, selectedDirs, nil
+}
+
+func syncItemsForDiscovered(skills []skillrepo.DiscoveredSkill) []syncer.Item {
+	items := make([]syncer.Item, len(skills))
+	for i, s := range skills {
+		items[i] = syncer.Item{Name: s.Name, Source: s.Path}
+	}
+	return items
 }
 
 func (a *App) cmdSync() *cobra.Command {

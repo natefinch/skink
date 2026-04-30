@@ -203,6 +203,9 @@ func TestBrowseViewUsesStatusShell(t *testing.T) {
 	if !strings.Contains(view.Content, "Select skills to add:") || !strings.Contains(view.Content, "skills/alpha") {
 		t.Fatalf("browse view missing picker content:\n%s", view.Content)
 	}
+	if !strings.Contains(view.Content, "        SKILL  PATH") {
+		t.Fatalf("browse header should align with skill rows:\n%s", view.Content)
+	}
 }
 
 func TestBrowseViewScrollsWithinTerminalHeight(t *testing.T) {
@@ -268,6 +271,69 @@ func TestBrowseModelInitialSelection(t *testing.T) {
 	}
 	if len(idxs) != 1 || idxs[0] != 0 {
 		t.Fatalf("initial selection = %v", idxs)
+	}
+}
+
+func TestBrowseModelSelectAllChecksAndUnchecksSkills(t *testing.T) {
+	m := newBrowseModel("", []BrowseItem{
+		{Name: "All skills", Path: "*", SelectsAll: true},
+		{Name: "alpha", Path: "alpha"},
+		{Name: "beta", Path: "beta"},
+	}, 0, 0)
+	next, _ := m.Update(keyMsg("space"))
+	m = next.(browseModel)
+	for i := range m.items {
+		if !m.selected[i] {
+			t.Fatalf("selecting all should check row %d: %+v", i, m.selected)
+		}
+	}
+
+	next, _ = m.Update(keyMsg("space"))
+	m = next.(browseModel)
+	for i := range m.items {
+		if m.selected[i] {
+			t.Fatalf("unselecting all should uncheck row %d: %+v", i, m.selected)
+		}
+	}
+}
+
+func TestBrowseModelUncheckingSkillClearsSelectAllOnly(t *testing.T) {
+	m := newBrowseModel("", []BrowseItem{
+		{Name: "All skills", Path: "*", SelectsAll: true},
+		{Name: "alpha", Path: "alpha"},
+		{Name: "beta", Path: "beta"},
+	}, 0, 0)
+	next, _ := m.Update(keyMsg("space"))
+	m = next.(browseModel)
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(browseModel)
+	next, _ = m.Update(keyMsg("space"))
+	m = next.(browseModel)
+
+	if m.selected[0] {
+		t.Fatalf("unchecking one skill should clear all-skills row: %+v", m.selected)
+	}
+	if m.selected[1] {
+		t.Fatalf("unchecking one skill should clear that skill: %+v", m.selected)
+	}
+	if !m.selected[2] {
+		t.Fatalf("unchecking one skill should leave other skills checked: %+v", m.selected)
+	}
+}
+
+func TestBrowseModelInitialSelectAllChecksSkillsWithoutDirtyState(t *testing.T) {
+	m := newBrowseModel("", []BrowseItem{
+		{Name: "All skills", Path: "*", Selected: true, SelectsAll: true},
+		{Name: "alpha", Path: "alpha"},
+		{Name: "beta", Path: "beta"},
+	}, 0, 0)
+	for i := range m.items {
+		if !m.selected[i] {
+			t.Fatalf("initial select-all should check row %d: %+v", i, m.selected)
+		}
+	}
+	if m.selectionChanged() {
+		t.Fatalf("initial select-all expansion should not mark the model dirty: selected=%+v initial=%+v", m.selected, m.initialSelected)
 	}
 }
 
@@ -591,6 +657,20 @@ func TestStatusViewUsesAltScreen(t *testing.T) {
 	}
 }
 
+func TestStatusViewUsesLizardCursor(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+	}}}, nil)
+	content := m.View().Content
+	if !strings.Contains(content, "🦎") {
+		t.Fatalf("status view should use lizard cursor:\n%s", content)
+	}
+	if strings.Contains(content, "❯") {
+		t.Fatalf("status view should not use arrow cursor:\n%s", content)
+	}
+}
+
 func TestStatusViewHelpIsSplitByTopic(t *testing.T) {
 	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
 		ID:   "repo",
@@ -687,6 +767,24 @@ func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
 	m = next.(statusModel)
 	if content = m.View().Content; strings.Contains(content, "first second") {
 		t.Fatalf("left should collapse expanded skill description:\n%s", content)
+	}
+}
+
+func TestStatusModelDifferentStatusHasSpaceAfterWarningEmoji(t *testing.T) {
+	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+		Skills: []StatusSkill{{
+			ID:     "alpha",
+			Name:   "alpha",
+			Path:   "skills/alpha",
+			Status: "different",
+		}},
+	}}}, nil)
+
+	content := m.View().Content
+	if !strings.Contains(content, "⚠️  ▸ alpha") {
+		t.Fatalf("different status should have visible spacing after warning emoji:\n%s", content)
 	}
 }
 
