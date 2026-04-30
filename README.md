@@ -1,12 +1,11 @@
-# skink
 
-<img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/c3c5610f-3a18-46df-8d00-7790860748e1" />
+# Skink 
+<img width="150" height="150" alt="skink logo" src="https://github.com/user-attachments/assets/34cbfa22-9765-448b-8309-1f69227f56d5" />
+      Don't copy and paste skills, keep them in sync with skink.
 
+<img align="center" width="500" height="300" alt="skink tui" src="https://github.com/user-attachments/assets/960ef3dc-1a1c-439e-ba98-423c289fcd3d" />  
+A tiny TUI tool for syncing AI-client skills from remote git repos. No registries needed.
 
-
-A tiny CLI for working with AI-client skills declared by the current project.
-Projects commit a `skink` config file that names external skills repositories;
-skink clones and updates those sources in a shared local cache.
 
 ## Install
 
@@ -16,13 +15,9 @@ go install github.com/natefinch/skink@latest
 
 Requires `git` on your `PATH`.
 
-## The project `skink` config file
+## The project `.skink` config file
 
-Skink reads a config file from the current project root. The config may declare
-where skills should be copied with `skilldir`, and declares skill sources via an
-`imports:` list. Each import is one git repo; by default every top-level
-directory is treated as a skill, but you can narrow it down to one or more
-directories or wildcard subtrees with `dirs:`.
+Skink records what skills should exist in the current repo in a .skink.\<ext\> file and lets you easily update and add/remove skills.
 
 ### Location and format
 
@@ -36,12 +31,14 @@ four formats. If multiple exist, this precedence applies (first match wins):
 
 ### Schema
 
+You don't really need to know the schema, since the TUI handles it for you, but it's useful to know for visual inspection.
+
 Top-level fields:
 
 | field      | required | notes                                                                                                                                  |
 |------------|----------|----------------------------------------------------------------------------------------------------------------------------------------|
 | `skilldir` | no       | Repo-relative directory where `sync` copies skills. Leading `/` is treated as relative, so `/skills` means `<repo>/skills`.             |
-| `imports`  | no       | List of external skill sources.                                                                                                        |
+| `imports`  | yes       | List of external skill sources.                                                                                                        |
 
 Each `imports` object accepts:
 
@@ -246,7 +243,7 @@ changes and refreshes statuses in place.
 | command | what it does                                                       |
 |---------|--------------------------------------------------------------------|
 | `skink` | Open an interactive status page for configured skills.             |
-| `sync`  | Update configured sources and copy skills into the repo skilldir.  |
+| `skink sync`  | Non-interactive update configured sources and copy skills into the repo skilldir.  |
 
 Use `sync -f` to force overwrite destination skill directories that differ from the
 cached source.
