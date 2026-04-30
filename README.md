@@ -1,6 +1,6 @@
 # skink
 
-<img width="400" height="400" alt="image" src="https://github.com/user-attachments/assets/c3c5610f-3a18-46df-8d00-7790860748e1" />
+<img width="652" height="436" alt="image" src="https://github.com/user-attachments/assets/960ef3dc-1a1c-439e-ba98-423c289fcd3d" />
 
 
 
