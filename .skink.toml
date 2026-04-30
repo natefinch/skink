@@ -1,0 +1,11 @@
+skilldir = ".github/skills"
+
+[[imports]]
+  url = "https://github.com/samber/cc-skills-golang/"
+  dirs = ["skills/golang-context", "skills/golang-performance"]
+  version = "v1.2.5"
+
+[[imports]]
+  url = "github.com/cxuu/golang-skills"
+  dirs = ["skills/go-functions", "skills/go-logging"]
+  version = ""

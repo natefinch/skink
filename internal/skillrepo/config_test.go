@@ -1,6 +1,7 @@
 package skillrepo
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,20 +19,18 @@ func writeFile(t *testing.T, dir, name, body string) {
 }
 
 func TestReadImportsNoFile(t *testing.T) {
-	got, err := ReadImports(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Imports != nil {
-		t.Errorf("want nil, got %+v", got)
+	_, err := ReadImports(t.TempDir())
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("want ErrConfigNotFound, got %v", err)
 	}
 }
 
 func TestReadImportsAllFormats(t *testing.T) {
 	cases := []struct {
-		fname, body string
+		fname, body, skillDir string
 	}{
-		{"skink.yaml", `
+		{".skink.yaml", `
+skilldir: /skills
 imports:
   - url: git@github.com:acme/team-skills.git
     dirs:
@@ -39,12 +38,14 @@ imports:
       - skills/bar/*
     version: v1
   - url: https://github.com/charm/skills.git
-`},
-		{"skink.json", `{"imports":[
+`, "skills"},
+		{".skink.json", `{"imports":[
   {"url":"git@github.com:acme/team-skills.git","dirs":["skills/foo","skills/bar/*"],"version":"v1"},
   {"url":"https://github.com/charm/skills.git"}
-]}`},
-		{"skink.toml", `
+],"skilldir":"/skills"}`, "skills"},
+		{".skink.toml", `
+skilldir = "/skills"
+
 [[imports]]
 url = "git@github.com:acme/team-skills.git"
 dirs = ["skills/foo", "skills/bar/*"]
@@ -52,7 +53,7 @@ version = "v1"
 
 [[imports]]
 url = "https://github.com/charm/skills.git"
-`},
+`, "skills"},
 	}
 	for _, c := range cases {
 		t.Run(c.fname, func(t *testing.T) {
@@ -65,6 +66,9 @@ url = "https://github.com/charm/skills.git"
 			if len(got.Imports) != 2 {
 				t.Fatalf("got %+v", got)
 			}
+			if got.SkillDir != c.skillDir {
+				t.Errorf("SkillDir = %q want %q", got.SkillDir, c.skillDir)
+			}
 			if got.Imports[0].URL != "git@github.com:acme/team-skills.git" || strings.Join(got.Imports[0].Dirs, ",") != "skills/foo,skills/bar/*" || got.Imports[0].Version != "v1" {
 				t.Errorf("got.Imports[0] = %+v", got.Imports[0])
 			}
@@ -75,9 +79,132 @@ url = "https://github.com/charm/skills.git"
 	}
 }
 
+func TestNormalizeSkillDir(t *testing.T) {
+	cases := []struct {
+		in, want string
+		err      bool
+	}{
+		{"", "", false},
+		{"skills", "skills", false},
+		{"/skills", "skills", false},
+		{" /skills/team ", "skills/team", false},
+		{"/", "", true},
+		{"../skills", "", true},
+		{"skills/../other", "", true},
+		{"./skills", "", true},
+	}
+	for _, c := range cases {
+		got, err := NormalizeSkillDir(c.in)
+		if c.err {
+			if err == nil {
+				t.Errorf("NormalizeSkillDir(%q) want error, got %q", c.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("NormalizeSkillDir(%q): %v", c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("NormalizeSkillDir(%q) = %q want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestReadImportsBadSkillDir(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".skink.yaml", "skilldir: ../escape\nimports: []\n")
+	_, err := ReadImports(dir)
+	if err == nil || !strings.Contains(err.Error(), "skilldir") {
+		t.Errorf("want skilldir error, got %v", err)
+	}
+}
+
+func TestSaveConfigCreatesYAMLAndAddImportDirsMerges(t *testing.T) {
+	dir := t.TempDir()
+	cfg := AddImportDirs(Config{SkillDir: "skills"}, "github.com/acme/skills", []string{"old"})
+	cfg = AddImportDirs(cfg, "github.com/acme/skills", []string{"old", "new"})
+	if err := SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadImports(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SkillDir != "skills" || len(got.Imports) != 1 {
+		t.Fatalf("unexpected config: %+v", got)
+	}
+	dirs := strings.Join(got.Imports[0].Dirs, ",")
+	if dirs != "old,new" {
+		t.Fatalf("dirs = %q", dirs)
+	}
+}
+
+func TestSetRepoVersionUpdatesMatchingImports(t *testing.T) {
+	cfg := Config{Imports: []Import{
+		{URL: "github.com/acme/skills", Dirs: []string{"one"}, Version: "v1.0.0"},
+		{URL: "https://github.com/acme/skills.git", Dirs: []string{"two"}, Version: "v1.0.0"},
+		{URL: "github.com/other/skills", Dirs: []string{"three"}, Version: "v1.0.0"},
+	}}
+	got := SetRepoVersion(cfg, "github.com/acme/skills", "v2.0.0")
+	if got.Imports[0].Version != "v2.0.0" || got.Imports[1].Version != "v2.0.0" {
+		t.Fatalf("matching imports not updated: %+v", got.Imports)
+	}
+	if got.Imports[2].Version != "v1.0.0" {
+		t.Fatalf("unrelated import changed: %+v", got.Imports[2])
+	}
+	got = SetRepoVersion(got, "github.com/acme/skills", "")
+	if got.Imports[0].Version != "" || got.Imports[1].Version != "" {
+		t.Fatalf("matching imports should be unpinned: %+v", got.Imports)
+	}
+}
+
+func TestRemoveRepoDirRemovesConcreteDirAndImport(t *testing.T) {
+	cfg := Config{Imports: []Import{
+		{URL: "github.com/acme/skills", Dirs: []string{"one", "two"}},
+		{URL: "github.com/acme/skills", Dirs: []string{"three"}},
+		{URL: "github.com/other/skills", Dirs: []string{"one"}},
+	}}
+	got, err := RemoveRepoDir(cfg, "github.com/acme/skills", "two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Imports[0].Dirs, ",") != "one" || strings.Join(got.Imports[1].Dirs, ",") != "three" {
+		t.Fatalf("unexpected dirs after first remove: %+v", got.Imports)
+	}
+	got, err = RemoveRepoDir(got, "github.com/acme/skills", "three")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Imports) != 2 {
+		t.Fatalf("empty import should be removed: %+v", got.Imports)
+	}
+	for _, imp := range got.Imports {
+		if imp.URL == "github.com/acme/skills" && strings.Join(imp.Dirs, ",") == "three" {
+			t.Fatalf("removed dir still configured: %+v", got.Imports)
+		}
+	}
+}
+
+func TestRemoveRepoDirBlocksWildcardImport(t *testing.T) {
+	cases := []struct {
+		cfg Config
+		dir string
+	}{
+		{Config{Imports: []Import{{URL: "github.com/acme/skills"}}}, "one"},
+		{Config{Imports: []Import{{URL: "github.com/acme/skills", Dirs: []string{"skills/*"}}}}, "skills/one"},
+	}
+	for _, c := range cases {
+		_, err := RemoveRepoDir(c.cfg, "github.com/acme/skills", c.dir)
+		if !errors.Is(err, ErrWildcardRemove) {
+			t.Fatalf("want ErrWildcardRemove, got %v", err)
+		}
+	}
+}
+
 func TestReadImportsMissingURL(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skink.yaml", "imports:\n  - dirs:\n      - foo\n")
+	writeFile(t, dir, ".skink.yaml", "imports:\n  - dirs:\n      - foo\n")
 	_, err := ReadImports(dir)
 	if err == nil || !strings.Contains(err.Error(), "url is required") {
 		t.Errorf("want url required, got %v", err)
@@ -86,7 +213,7 @@ func TestReadImportsMissingURL(t *testing.T) {
 
 func TestReadImportsBadURL(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skink.yaml", "imports:\n  - url: nonsense\n")
+	writeFile(t, dir, ".skink.yaml", "imports:\n  - url: nonsense\n")
 	_, err := ReadImports(dir)
 	if err == nil {
 		t.Fatal("want error")
@@ -95,7 +222,7 @@ func TestReadImportsBadURL(t *testing.T) {
 
 func TestReadImportsBadDir(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "skink.yaml", `
+	writeFile(t, dir, ".skink.yaml", `
 imports:
   - url: github.com/a/b
     dirs:

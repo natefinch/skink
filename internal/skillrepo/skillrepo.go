@@ -1,5 +1,5 @@
-// Package skillrepo manages the local checkout of the user's skills git
-// repository and enumerates the skills it contains.
+// Package skillrepo manages local checkouts of skills git repositories and
+// enumerates the skills they contain.
 //
 // All git operations go through the GitRunner interface so tests can use a
 // fake runner and avoid the network.
@@ -21,6 +21,11 @@ import (
 // dir is the working directory to run in (may be "" for Clone's parent).
 type GitRunner interface {
 	Run(ctx context.Context, dir string, args ...string) error
+}
+
+// GitOutputRunner is implemented by git runners that can return stdout.
+type GitOutputRunner interface {
+	RunOutput(ctx context.Context, dir string, args ...string) (string, error)
 }
 
 // ExecGit is the production GitRunner, shelling out to the git binary.
@@ -48,6 +53,25 @@ func (g ExecGit) Run(ctx context.Context, dir string, args ...string) error {
 		return fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(buf.String()))
 	}
 	return nil
+}
+
+func (g ExecGit) RunOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	if g.Verbose {
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = &stderr
+	}
+	if err := cmd.Run(); err != nil {
+		if g.Verbose || stderr.Len() == 0 {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return "", fmt.Errorf("git %s: %w\n%s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
 }
 
 // Repo is a local skills-repo checkout rooted at Dir.
@@ -86,6 +110,20 @@ func (r Repo) Clone(ctx context.Context, url string) error {
 	return r.Git.Run(ctx, filepath.Dir(r.Dir), "clone", url, filepath.Base(r.Dir))
 }
 
+// CloneShallow clones url into r.Dir with --depth=1.
+func (r Repo) CloneShallow(ctx context.Context, url string) error {
+	if url == "" {
+		return fmt.Errorf("skillrepo: empty url")
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Dir), 0o755); err != nil {
+		return fmt.Errorf("skillrepo: mkdir parent: %w", err)
+	}
+	if entries, _ := os.ReadDir(r.Dir); len(entries) > 0 {
+		return fmt.Errorf("skillrepo: %s already exists and is not empty", r.Dir)
+	}
+	return r.Git.Run(ctx, filepath.Dir(r.Dir), "clone", "--depth=1", url, filepath.Base(r.Dir))
+}
+
 // Pull runs `git pull --ff-only` in the checkout.
 func (r Repo) Pull(ctx context.Context) error {
 	if !r.Exists() {
@@ -114,11 +152,22 @@ func (r Repo) Checkout(ctx context.Context, ref string) error {
 	return r.Git.Run(ctx, r.Dir, "checkout", ref)
 }
 
+func (r Repo) output(ctx context.Context, args ...string) (string, error) {
+	g, ok := r.Git.(GitOutputRunner)
+	if !ok {
+		return "", fmt.Errorf("skillrepo: git runner cannot return output")
+	}
+	return g.RunOutput(ctx, r.Dir, args...)
+}
+
 // Skill describes one installable skill in the repo.
 type Skill struct {
-	Name           string // directory basename (and frontmatter name)
+	Name           string // directory basename
 	Path           string // absolute path to the skill directory on disk
-	Source         string // "" for the primary repo, "host/path" otherwise
+	Source         string // source repo as "host/path"
+	SourceURL      string // source repo URL as declared in config
+	SourceDir      string // skill path relative to source repo root
+	Version        string // configured git ref, if pinned
 	InstallSubpath string // relative target path under a client's skills dir
 }
 

@@ -1,6 +1,6 @@
 // Package paths resolves filesystem locations used by skink:
-// the user's home directory, the skink home (~/.skink), the checkout
-// directory inside it, and the project root for an install.
+// the user's home directory, the skink cache home (~/.skink), and the project
+// root for project-local skink config.
 //
 // The package is pure and FS-free aside from calls through an Env
 // abstraction, so tests can inject overrides.
@@ -49,9 +49,7 @@ func (f FakeEnv) Getwd() (string, error) {
 // Layout holds the resolved skink paths.
 type Layout struct {
 	Home      string // user home, e.g. /Users/me
-	SkinkHome string // ~/.skink
-	Checkout  string // ~/.skink/repo
-	Config    string // ~/.skink/config.yaml
+	SkinkHome string // ~/.skink cache for external source clones
 }
 
 // Resolve builds a Layout from the given Env.
@@ -70,8 +68,6 @@ func Resolve(env Env) (Layout, error) {
 	return Layout{
 		Home:      home,
 		SkinkHome: sh,
-		Checkout:  filepath.Join(sh, "repo"),
-		Config:    filepath.Join(sh, "config.yaml"),
 	}, nil
 }
 

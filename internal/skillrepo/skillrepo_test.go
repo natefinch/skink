@@ -12,6 +12,7 @@ import (
 // fakeGit records calls and can simulate a clone by creating .git.
 type fakeGit struct {
 	calls       [][]string
+	outputs     map[string]string
 	cloneCreate bool
 	err         error
 }
@@ -28,6 +29,17 @@ func (f *fakeGit) Run(_ context.Context, dir string, args ...string) error {
 		}
 	}
 	return nil
+}
+
+func (f *fakeGit) RunOutput(_ context.Context, dir string, args ...string) (string, error) {
+	f.calls = append(f.calls, append([]string{dir}, args...))
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.outputs == nil {
+		return "", nil
+	}
+	return f.outputs[strings.Join(args, " ")], nil
 }
 
 func TestExistsFalse(t *testing.T) {
@@ -180,5 +192,109 @@ func TestFind(t *testing.T) {
 	}
 	if ok {
 		t.Error("missing should be false")
+	}
+}
+
+func TestTagsParsesGitOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGit{outputs: map[string]string{
+		"for-each-ref --sort=-creatordate --format=%(refname:short)%00%(creatordate:iso8601-strict) refs/tags": "v1.2.0\x002026-01-02T03:04:05Z\nv1.1.0\x002026-01-01T03:04:05Z\n",
+	}}
+	got, err := New(dir, g).Tags(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "v1.2.0" || got[0].Created != "2026-01-02T03:04:05Z" {
+		t.Fatalf("tags = %+v", got)
+	}
+}
+
+func TestRemoteTagsParsesLsRemoteOutput(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGit{outputs: map[string]string{
+		"ls-remote --tags --refs origin": "abc\trefs/tags/v1.0.0\ndef\trefs/tags/v1.2.0\n",
+	}}
+	got, err := New(dir, g).RemoteTags(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Name != "v1.0.0" || got[1].Name != "v1.2.0" {
+		t.Fatalf("remote tags = %+v", got)
+	}
+}
+
+func TestMergeTagsPreservesLocalDates(t *testing.T) {
+	got := MergeTags(
+		[]Tag{{Name: "v1.0.0", Created: "date"}, {Name: "v1.1.0"}},
+		[]Tag{{Name: "v1.0.0"}, {Name: "v1.2.0"}},
+	)
+	want := map[string]string{
+		"v1.0.0": "date",
+		"v1.1.0": "",
+		"v1.2.0": "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("merged tags = %+v", got)
+	}
+	for _, tag := range got {
+		if want[tag.Name] != tag.Created {
+			t.Fatalf("tag %s created = %q want %q; all=%+v", tag.Name, tag.Created, want[tag.Name], got)
+		}
+	}
+}
+
+func TestSemverTagsSortNewestFirst(t *testing.T) {
+	got := SemverTags([]Tag{{Name: "v1.2.9"}, {Name: "v1.2.10"}, {Name: "notes"}, {Name: "1.3.0"}})
+	want := []string{"1.3.0", "v1.2.10", "v1.2.9"}
+	if len(got) != len(want) {
+		t.Fatalf("semver tags = %+v", got)
+	}
+	for i := range want {
+		if got[i].Name != want[i] {
+			t.Fatalf("semver tag %d = %q want %q", i, got[i].Name, want[i])
+		}
+	}
+}
+
+func TestNewerSemverTags(t *testing.T) {
+	got, ok := NewerSemverTags([]Tag{{Name: "v1.0.0"}, {Name: "v1.2.0"}, {Name: "v2.0.0"}}, "v1.1.0")
+	if !ok {
+		t.Fatal("current tag should parse as semver")
+	}
+	want := []string{"v2.0.0", "v1.2.0"}
+	if len(got) != len(want) {
+		t.Fatalf("newer tags = %+v", got)
+	}
+	for i := range want {
+		if got[i].Name != want[i] {
+			t.Fatalf("newer tag %d = %q want %q", i, got[i].Name, want[i])
+		}
+	}
+	if _, ok := NewerSemverTags([]Tag{{Name: "v1.0.0"}}, "release-a"); ok {
+		t.Fatal("non-semver current tag should not be semver comparable")
+	}
+}
+
+func TestRemoteHeadChanged(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGit{outputs: map[string]string{
+		"rev-parse HEAD":        "abc\n",
+		"ls-remote origin HEAD": "def\tHEAD\n",
+	}}
+	changed, err := New(dir, g).RemoteHeadChanged(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("remote head should be reported changed")
 	}
 }

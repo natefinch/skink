@@ -18,12 +18,6 @@ func TestResolve(t *testing.T) {
 	if l.SkinkHome != filepath.Join("/u/me", ".skink") {
 		t.Errorf("skink home = %q", l.SkinkHome)
 	}
-	if l.Checkout != filepath.Join("/u/me", ".skink", "repo") {
-		t.Errorf("checkout = %q", l.Checkout)
-	}
-	if l.Config != filepath.Join("/u/me", ".skink", "config.yaml") {
-		t.Errorf("config = %q", l.Config)
-	}
 }
 
 func TestResolveErrors(t *testing.T) {

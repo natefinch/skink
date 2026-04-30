@@ -8,10 +8,10 @@ import (
 	"sort"
 )
 
-// Library is the full set of skill sources available to skink: the user's
-// primary skills checkout plus any imports declared in its config file.
+// Library is the full set of external skill sources declared by a project's
+// skink config file.
 type Library struct {
-	Primary Repo
+	Config  Config
 	Sources []Source
 }
 
@@ -26,20 +26,16 @@ type Source struct {
 	Repo    Repo
 }
 
-// NewLibrary constructs a Library for the given skink home dir. Imports
-// are read from the primary repo's config file. Imports of imports are not
-// followed.
-func NewLibrary(home string, git GitRunner) (Library, error) {
-	primaryDir := filepath.Join(home, "repo")
-	primary := New(primaryDir, git)
-	lib := Library{Primary: primary}
-	if !primary.Exists() {
-		return lib, nil
-	}
-	cfg, err := ReadImports(primaryDir)
+// NewLibrary constructs a Library from the skink config in projectRoot.
+// External source repos are cloned under cacheHome. Imports of imports are
+// not followed.
+func NewLibrary(projectRoot, cacheHome string, git GitRunner) (Library, error) {
+	var lib Library
+	cfg, err := ReadImports(projectRoot)
 	if err != nil {
 		return lib, err
 	}
+	lib.Config = cfg
 
 	byDir := map[string]int{} // clone dir -> index into lib.Sources
 	for _, imp := range cfg.Imports {
@@ -47,7 +43,7 @@ func NewLibrary(home string, git GitRunner) (Library, error) {
 		if err != nil {
 			return lib, err
 		}
-		cloneDir := filepath.Join(append([]string{home}, u.CloneDirSegments()...)...)
+		cloneDir := filepath.Join(append([]string{cacheHome}, u.CloneDirSegments()...)...)
 		if idx, ok := byDir[cloneDir]; ok {
 			existing := &lib.Sources[idx]
 			if existing.Version != imp.Version {
@@ -89,14 +85,11 @@ func (l Library) EnsureCloned(ctx context.Context) error {
 	return nil
 }
 
-// PullAll updates the primary repo and every Source. Pinned sources are
-// fetched + checked out to their version; unpinned sources get
-// `git pull --ff-only`. Errors from individual sources are aggregated.
+// PullAll updates every Source. Pinned sources are fetched + checked out to
+// their version; unpinned sources get `git pull --ff-only`. Errors from
+// individual sources are aggregated.
 func (l Library) PullAll(ctx context.Context) error {
 	var errs []error
-	if err := l.Primary.Pull(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("primary: %w", err))
-	}
 	for _, s := range l.Sources {
 		if !s.Repo.Exists() {
 			continue
@@ -128,14 +121,10 @@ func (l Library) PullAll(ctx context.Context) error {
 
 // ListAll returns every skill available in the library.
 //
-// Primary repo skills come first, in name order. Their InstallSubpath is
-// just the skill name (flat install layout, preserving pre-imports
-// behavior).
-//
-// Then, for each Source in declaration order, each of its Imports is
-// expanded against the on-disk clone: `dirs: [foo]` produces one skill at
-// `<clone>/foo`, `dirs: [foo/*]` or the default produces one skill for
-// every immediate subdirectory. Imported skills carry an InstallSubpath of
+// For each Source in declaration order, each of its Imports is expanded
+// against the on-disk clone: `dirs: [foo]` produces one skill at
+// `<clone>/foo`, `dirs: [foo/*]` or the default produces one skill for every
+// immediate subdirectory. Skills carry an InstallSubpath of
 // `<host>/<path>/<skill-subpath>` so different sources don't collide.
 //
 // If a Source's repo isn't cloned yet (or a referenced subdirectory
@@ -143,18 +132,6 @@ func (l Library) PullAll(ctx context.Context) error {
 // to get a complete listing.
 func (l Library) ListAll() ([]Skill, error) {
 	var out []Skill
-
-	if l.Primary.Exists() {
-		primaries, err := l.Primary.List()
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range primaries {
-			s.Source = ""
-			s.InstallSubpath = s.Name
-			out = append(out, s)
-		}
-	}
 
 	for _, src := range l.Sources {
 		if !src.Repo.Exists() {
@@ -177,6 +154,9 @@ func (l Library) ListAll() ([]Skill, error) {
 						Name:           rs.name,
 						Path:           rs.path,
 						Source:         src.URL.DisplayPath(),
+						SourceURL:      src.URL.Original,
+						SourceDir:      rs.subpath,
+						Version:        src.Version,
 						InstallSubpath: filepath.Join(basePath, sub),
 					})
 				}
@@ -237,8 +217,7 @@ func expandSelector(repoDir string, sel DirSelector) ([]resolvedSkill, error) {
 				continue
 			}
 			if sel.Prefix == "" {
-				// repo root: skip dotfiles and reserved names to match
-				// Primary.List() semantics.
+				// repo root: skip dotfiles and reserved names.
 				if _, skip := reservedTopLevel[name]; skip {
 					continue
 				}
