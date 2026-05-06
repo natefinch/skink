@@ -120,29 +120,14 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 	}
 	page.snapshot.Message = message
 
-	// Load global config if available.
-	if !a.Global {
-		// When not in --global mode, still try to load global for combined TUI.
-		globalCfg, globalFound, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
-		if err != nil {
-			return statusPage{}, err
-		}
-		if globalFound {
-			sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeGlobal, layout.SkinkHome, globalCfg)
-			if err != nil {
-				return statusPage{}, err
-			}
-			page.scopes[tui.ScopeGlobal] = sp
-			page.snapshot.Sections = append(page.snapshot.Sections, sec)
-		}
-	} else {
-		// --global mode: only global.
+	if a.Global {
+		// --global mode: only global section.
 		globalCfg, globalFound, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
 		if err != nil {
 			return statusPage{}, err
 		}
 		if !globalFound {
-			// Bootstrap will be handled by the caller; return empty.
+			// Bootstrap will be handled by the caller; show empty section.
 			sp := &statusScopePage{
 				root:       layout.SkinkHome,
 				targetRoot: layout.GlobalSkillDir(""),
@@ -167,33 +152,75 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 		return page, nil
 	}
 
-	// Load project config.
-	projectRoot, err := paths.ProjectRoot(a.Env)
+	// Non-global mode: always show both sections.
+
+	// Global section.
+	globalCfg, globalFound, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
 	if err != nil {
-		// If we have global skills, show them alone.
-		if _, hasGlobal := page.scopes[tui.ScopeGlobal]; hasGlobal {
-			return page, nil
-		}
 		return statusPage{}, err
 	}
-	projectCfg, projectErr := skillrepo.ReadImports(projectRoot)
-	if projectErr != nil {
-		if errors.Is(projectErr, skillrepo.ErrConfigNotFound) {
-			// No project config — show global-only if available.
-			if _, hasGlobal := page.scopes[tui.ScopeGlobal]; hasGlobal {
-				return page, nil
-			}
-			return statusPage{}, fmt.Errorf("no skink config found in %s (expected .skink.yaml, .skink.yml, .skink.json, or .skink.toml)", projectRoot)
+	if globalFound {
+		sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeGlobal, layout.SkinkHome, globalCfg)
+		if err != nil {
+			return statusPage{}, err
 		}
-		return statusPage{}, projectErr
+		page.scopes[tui.ScopeGlobal] = sp
+		page.snapshot.Sections = append(page.snapshot.Sections, sec)
+	} else {
+		sp := &statusScopePage{
+			root:       layout.SkinkHome,
+			targetRoot: layout.GlobalSkillDir(""),
+			config:     skillrepo.Config{SkillDir: paths.DefaultGlobalSkillDir},
+			repos:      map[string]statusRepoAction{},
+			addedRepos: map[string]sourceSkillSelection{},
+			skills:     map[string]statusSkillAction{},
+		}
+		page.scopes[tui.ScopeGlobal] = sp
+		page.snapshot.Sections = append(page.snapshot.Sections, tui.StatusSection{
+			Scope: tui.ScopeGlobal,
+			Title: "Global Skills",
+		})
 	}
 
-	sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeProject, projectRoot, projectCfg)
-	if err != nil {
-		return statusPage{}, err
+	// Project section.
+	projectRoot, projectRootErr := paths.ProjectRoot(a.Env)
+	if projectRootErr != nil {
+		// Can't determine project root — still show empty project section.
+		projectRoot = ""
 	}
-	page.scopes[tui.ScopeProject] = sp
-	page.snapshot.Sections = append(page.snapshot.Sections, sec)
+	var projectCfg skillrepo.Config
+	var projectFound bool
+	if projectRoot != "" {
+		projectCfg, projectRootErr = skillrepo.ReadImports(projectRoot)
+		if projectRootErr != nil {
+			if !errors.Is(projectRootErr, skillrepo.ErrConfigNotFound) {
+				return statusPage{}, projectRootErr
+			}
+		} else {
+			projectFound = true
+		}
+	}
+	if projectFound {
+		sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeProject, projectRoot, projectCfg)
+		if err != nil {
+			return statusPage{}, err
+		}
+		page.scopes[tui.ScopeProject] = sp
+		page.snapshot.Sections = append(page.snapshot.Sections, sec)
+	} else {
+		sp := &statusScopePage{
+			root:       projectRoot,
+			config:     skillrepo.Config{},
+			repos:      map[string]statusRepoAction{},
+			addedRepos: map[string]sourceSkillSelection{},
+			skills:     map[string]statusSkillAction{},
+		}
+		page.scopes[tui.ScopeProject] = sp
+		page.snapshot.Sections = append(page.snapshot.Sections, tui.StatusSection{
+			Scope: tui.ScopeProject,
+			Title: "Project Skills",
+		})
+	}
 
 	// Check for duplicate skill names across scopes.
 	addDuplicateWarnings(&page)
@@ -574,6 +601,10 @@ func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action t
 	if action.URL == "" {
 		return "no repo URL entered", nil
 	}
+	// Ensure the config file exists for this scope before saving imports.
+	if err := a.ensureScopeConfig(action.Scope, sp); err != nil {
+		return "", err
+	}
 	selection, ok := sp.addedRepos[action.URL]
 	if !ok {
 		gitURL, repo, err := a.prepareRepo(ctx, page.skinkHome, action.URL)
@@ -593,6 +624,27 @@ func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action t
 		return "", err
 	}
 	return fmt.Sprintf("added skills from %s", action.URL), nil
+}
+
+// ensureScopeConfig creates the config file for a scope if it doesn't exist yet.
+// For global scope, creates ~/.skink/.skink.toml; for project scope, SaveConfig
+// will handle creation of .skink.yaml when imports are first written.
+func (a *App) ensureScopeConfig(scope tui.Scope, sp *statusScopePage) error {
+	if scope != tui.ScopeGlobal {
+		return nil
+	}
+	if sp.root == "" {
+		return fmt.Errorf("no root directory for %s scope", scope)
+	}
+	_, found, err := skillrepo.FindConfig(sp.root)
+	if err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	configPath := filepath.Join(sp.root, ".skink.toml")
+	return skillrepo.SaveConfigAt(configPath, sp.config)
 }
 
 func (a *App) handleStatusUpdateTag(ctx context.Context, page statusPage, action tui.StatusAction) (string, error) {

@@ -1110,8 +1110,51 @@ skilldir = ".agent/skills"
 		t.Fatal("expected status snapshot")
 	}
 	snap := p.statusItems[0]
-	if len(snap.Sections) != 1 || snap.Sections[0].Scope != tui.ScopeGlobal {
-		t.Fatalf("expected global-only section, got %+v", snap.Sections)
+	if len(snap.Sections) != 2 {
+		t.Fatalf("expected both sections, got %d", len(snap.Sections))
+	}
+	if snap.Sections[0].Scope != tui.ScopeGlobal || len(snap.Sections[0].Repos) != 1 {
+		t.Fatalf("expected global section with repos, got %+v", snap.Sections[0])
+	}
+	if snap.Sections[1].Scope != tui.ScopeProject || len(snap.Sections[1].Repos) != 0 {
+		t.Fatalf("expected empty project section, got %+v", snap.Sections[1])
+	}
+}
+
+func TestStatusAlwaysShowsBothSectionsWithProjectOnly(t *testing.T) {
+	app, home, proj, _, p, _ := setup(t)
+	_ = home // no global config
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - alpha
+`)
+	importDir := seedImport(t, home, "github.com", "acme", "team")
+	if err := os.MkdirAll(filepath.Join(importDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(importDir, "alpha", "SKILL.md"), []byte("proj\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statusItems) == 0 {
+		t.Fatal("expected status snapshot")
+	}
+	snap := p.statusItems[0]
+	if len(snap.Sections) != 2 {
+		t.Fatalf("expected both sections even with project-only config, got %d", len(snap.Sections))
+	}
+	if snap.Sections[0].Scope != tui.ScopeGlobal || len(snap.Sections[0].Repos) != 0 {
+		t.Fatalf("expected empty global section, got %+v", snap.Sections[0])
+	}
+	if snap.Sections[1].Scope != tui.ScopeProject || len(snap.Sections[1].Repos) != 1 {
+		t.Fatalf("expected project section with repos, got %+v", snap.Sections[1])
 	}
 }
 
