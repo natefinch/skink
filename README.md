@@ -3,7 +3,8 @@
 <img width="150" height="150" alt="skink logo" src="https://github.com/user-attachments/assets/34cbfa22-9765-448b-8309-1f69227f56d5" />
       Don't copy and paste skills, keep them in sync with skink.
 
-<img align="center" width="500" height="300" alt="skink tui" src="https://github.com/user-attachments/assets/960ef3dc-1a1c-439e-ba98-423c289fcd3d" />  
+<img width="722" height="444" alt="image" src="https://github.com/user-attachments/assets/3d7a41f7-e0c7-4395-85b5-586972058225" />
+ 
 A tiny TUI tool for syncing AI-client skills from remote git repos. No registries needed.
 
 
