@@ -605,6 +605,35 @@ func TestStatusModelChooseSkillsEscReturnsToStatusView(t *testing.T) {
 	}
 }
 
+func TestStatusModelChooseSkillsFromSkillRow(t *testing.T) {
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+		BrowseItems: []BrowseItem{
+			{Name: "alpha", Path: "alpha", Selected: true},
+			{Name: "beta", Path: "beta"},
+		},
+		Skills: []StatusSkill{{ID: "skill1", Name: "alpha", Path: "skills/alpha", Status: "up to date"}},
+	}}), nil)
+	// Move past section header and repo to skill row.
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	// Press c on skill — should open choose skills for the parent repo.
+	next, cmd := m.Update(keyMsg("c"))
+	m = next.(statusModel)
+	if cmd != nil || m.browse == nil {
+		t.Fatalf("c on skill should open browse for parent repo: %+v cmd=%v", m, cmd)
+	}
+	if m.browseRepoID != "repo" {
+		t.Fatalf("browse should target parent repo, got %q", m.browseRepoID)
+	}
+	if m.browse.subtitle != "repo" {
+		t.Fatalf("browse subtitle should show repo name, got %q", m.browse.subtitle)
+	}
+}
+
 func TestStatusModelWaitsForRepoChecksBeforeTagActions(t *testing.T) {
 	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:       "repo",

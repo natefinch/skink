@@ -386,6 +386,7 @@ func newBrowseModel(title string, items []BrowseItem, width, height int) browseM
 
 type browseModel struct {
 	title           string
+	subtitle        string
 	items           []BrowseItem
 	selected        map[int]bool
 	initialSelected map[int]bool
@@ -525,6 +526,9 @@ func (m browseModel) View() tea.View {
 	footer := m.browseFooter(scrollHint(start, end, len(lines)))
 
 	b.WriteString(header)
+	if m.subtitle != "" {
+		fmt.Fprintf(&b, "  Repo: %s\n\n", titleStyle.Render(m.subtitle))
+	}
 	fmt.Fprintf(&b, "        %-*s  %s\n", nameWidth, "SKILL", "PATH")
 	for _, line := range lines[start:end] {
 		b.WriteString(line)
@@ -957,6 +961,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addRepo = nil
 		m.addRepoURL = msg.result.URL
 		browse := newBrowseModel("Select skills to add:", msg.result.Items, m.width, m.height)
+		browse.subtitle = msg.result.URL
 		m.browse = &browse
 		m.err = ""
 		return m, nil
@@ -1045,7 +1050,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.addRepo.Init()
 			}
 		case "c":
-			if repo, ok := m.currentRepo(); ok {
+			if repo, ok := m.repoForCursor(); ok {
 				if repo.BrowseError != "" {
 					m.err = repo.BrowseError
 					return m, nil
@@ -1055,6 +1060,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				browse := newBrowseModel("Select skills to add:", repo.BrowseItems, m.width, m.height)
+				browse.subtitle = repo.Name
 				m.browse = &browse
 				m.browseRepoID = repo.ID
 				m.addRepoScope = repo.Scope
@@ -1239,6 +1245,19 @@ func (m statusModel) currentRepo() (StatusRepo, bool) {
 		return StatusRepo{}, false
 	}
 	return m.snapshot.Sections[row.section].Repos[row.repo], row.kind == "repo"
+}
+
+// repoForCursor returns the repo for the current cursor position, whether
+// the cursor is on a repo row or a skill row within that repo.
+func (m statusModel) repoForCursor() (StatusRepo, bool) {
+	if len(m.rows) == 0 {
+		return StatusRepo{}, false
+	}
+	row := m.rows[m.cursor]
+	if row.kind == "section" {
+		return StatusRepo{}, false
+	}
+	return m.snapshot.Sections[row.section].Repos[row.repo], true
 }
 
 func (m statusModel) currentSkill() (StatusRepo, StatusSkill, bool) {
