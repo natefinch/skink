@@ -704,6 +704,15 @@ func visibleRange(total, scroll, height int) (int, int) {
 	return scroll, scroll + height
 }
 
+// Scope identifies whether a skill/repo belongs to the global or project
+// configuration.
+type Scope string
+
+const (
+	ScopeGlobal  Scope = "global"
+	ScopeProject Scope = "project"
+)
+
 type StatusActionKind string
 
 const (
@@ -718,6 +727,7 @@ const (
 
 type StatusAction struct {
 	Kind     StatusActionKind
+	Scope    Scope
 	RepoID   string
 	SkillID  string
 	Tag      string
@@ -734,13 +744,30 @@ type StatusAddRepoResult struct {
 	Items []BrowseItem
 }
 
+// StatusSection groups repos by scope (global or project) in the TUI.
+type StatusSection struct {
+	Scope Scope
+	Title string
+	Repos []StatusRepo
+}
+
 type StatusSnapshot struct {
-	Repos   []StatusRepo
-	Message string
+	Sections []StatusSection
+	Message  string
+}
+
+// Repos returns all repos across all sections.
+func (s StatusSnapshot) Repos() []StatusRepo {
+	var out []StatusRepo
+	for _, sec := range s.Sections {
+		out = append(out, sec.Repos...)
+	}
+	return out
 }
 
 type StatusRepo struct {
 	ID          string
+	Scope       Scope
 	Name        string
 	Version     string
 	Upgrade     bool
@@ -812,9 +839,10 @@ type statusApplyMsg struct {
 }
 
 type statusRow struct {
-	kind  string
-	repo  int
-	skill int
+	kind    string // "section", "repo", or "skill"
+	section int
+	repo    int
+	skill   int
 }
 
 type statusModel struct {
@@ -834,6 +862,7 @@ type statusModel struct {
 	addRepoFunc   StatusAddRepoFunc
 	addRepoStatus string
 	addRepoURL    string
+	addRepoScope  Scope
 	apply         StatusApplyFunc
 	applying      bool
 	browse        *browseModel
@@ -865,10 +894,13 @@ func newStatusModelWithApply(
 
 func (m *statusModel) rebuildRows() {
 	m.rows = nil
-	for i, repo := range m.snapshot.Repos {
-		m.rows = append(m.rows, statusRow{kind: "repo", repo: i})
-		for j := range repo.Skills {
-			m.rows = append(m.rows, statusRow{kind: "skill", repo: i, skill: j})
+	for si, sec := range m.snapshot.Sections {
+		m.rows = append(m.rows, statusRow{kind: "section", section: si})
+		for ri, repo := range sec.Repos {
+			m.rows = append(m.rows, statusRow{kind: "repo", section: si, repo: ri})
+			for ski := range repo.Skills {
+				m.rows = append(m.rows, statusRow{kind: "skill", section: si, repo: ri, skill: ski})
+			}
 		}
 	}
 	if m.cursor >= len(m.rows) {
@@ -960,9 +992,9 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "y", "Y":
 				row := m.rows[m.cursor]
-				repo := m.snapshot.Repos[row.repo]
+				repo := m.snapshot.Sections[row.section].Repos[row.repo]
 				skill := repo.Skills[row.skill]
-				return m.finishStatusAction(StatusAction{Kind: StatusActionDelete, RepoID: repo.ID, SkillID: skill.ID})
+				return m.finishStatusAction(StatusAction{Kind: StatusActionDelete, Scope: repo.Scope, RepoID: repo.ID, SkillID: skill.ID})
 			case "n", "N", "esc", "enter":
 				m.confirmDelete = false
 				return m, nil
@@ -1001,11 +1033,13 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.expanded[skill.ID] = false
 			}
 		case "a":
-			if _, ok := m.currentRepo(); ok {
+			row := m.rows[m.cursor]
+			if row.kind == "section" || row.kind == "repo" || row.kind == "skill" {
 				addRepo := newTextModel("Add skills repo", "Enter the git URL of a skills repo:", "github.com/owner/skills")
 				m.addRepo = &addRepo
 				m.addRepoURL = ""
 				m.addRepoStatus = ""
+				m.addRepoScope = m.currentScope()
 				m.browseRepoID = ""
 				m.err = ""
 				return m, m.addRepo.Init()
@@ -1023,6 +1057,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				browse := newBrowseModel("Select skills to add:", repo.BrowseItems, m.width, m.height)
 				m.browse = &browse
 				m.browseRepoID = repo.ID
+				m.addRepoScope = repo.Scope
 				m.err = ""
 				return m, nil
 			}
@@ -1054,7 +1089,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.err = "could not check this repo: " + repo.Error
 					return m, nil
 				}
-				action := StatusAction{Kind: StatusActionNext, RepoID: repo.ID}
+				action := StatusAction{Kind: StatusActionNext, Scope: repo.Scope, RepoID: repo.ID}
 				if repo.Version != "" && repo.Upgrade && len(repo.Tags) > 0 {
 					action.Tag = repo.Tags[0].Name
 				}
@@ -1062,7 +1097,7 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "s":
 			if repo, skill, ok := m.currentSkill(); ok {
-				return m.finishStatusAction(StatusAction{Kind: StatusActionSync, RepoID: repo.ID, SkillID: skill.ID})
+				return m.finishStatusAction(StatusAction{Kind: StatusActionSync, Scope: repo.Scope, RepoID: repo.ID, SkillID: skill.ID})
 			}
 		case "d":
 			if _, _, ok := m.currentSkill(); ok {
@@ -1106,6 +1141,7 @@ func (m statusModel) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		action := StatusAction{
 			Kind:     kind,
+			Scope:    m.addRepoScope,
 			RepoID:   m.browseRepoID,
 			URL:      m.addRepoURL,
 			Selected: selectedIndices(browse.items, browse.selected),
@@ -1151,7 +1187,7 @@ func (m statusModel) updateAddRepo(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.addRepo = &addRepo
 	if addRepo.done {
 		if m.addRepoFunc == nil {
-			m.action = StatusAction{Kind: StatusActionAddRepo, URL: addRepo.value}
+			m.action = StatusAction{Kind: StatusActionAddRepo, Scope: m.addRepoScope, URL: addRepo.value}
 			return m, tea.Quit
 		}
 		m.addRepoStatus = fmt.Sprintf("Cloning %s ...", addRepo.value)
@@ -1189,7 +1225,7 @@ func (m statusModel) updateTagSelect(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		tag := repo.Tags[m.tagCursor]
-		return m.finishStatusAction(StatusAction{Kind: StatusActionUpdateTag, RepoID: repo.ID, Tag: tag.Name})
+		return m.finishStatusAction(StatusAction{Kind: StatusActionUpdateTag, Scope: repo.Scope, RepoID: repo.ID, Tag: tag.Name})
 	}
 	return m, nil
 }
@@ -1199,7 +1235,10 @@ func (m statusModel) currentRepo() (StatusRepo, bool) {
 		return StatusRepo{}, false
 	}
 	row := m.rows[m.cursor]
-	return m.snapshot.Repos[row.repo], row.kind == "repo"
+	if row.kind == "section" {
+		return StatusRepo{}, false
+	}
+	return m.snapshot.Sections[row.section].Repos[row.repo], row.kind == "repo"
 }
 
 func (m statusModel) currentSkill() (StatusRepo, StatusSkill, bool) {
@@ -1210,8 +1249,16 @@ func (m statusModel) currentSkill() (StatusRepo, StatusSkill, bool) {
 	if row.kind != "skill" {
 		return StatusRepo{}, StatusSkill{}, false
 	}
-	repo := m.snapshot.Repos[row.repo]
+	repo := m.snapshot.Sections[row.section].Repos[row.repo]
 	return repo, repo.Skills[row.skill], true
+}
+
+func (m statusModel) currentScope() Scope {
+	if len(m.rows) == 0 {
+		return ScopeProject
+	}
+	row := m.rows[m.cursor]
+	return m.snapshot.Sections[row.section].Scope
 }
 
 func statusHeader(title string) string {
@@ -1250,7 +1297,7 @@ func (m statusModel) View() tea.View {
 	}
 	var b strings.Builder
 	writeStatusHeader(&b, m.title)
-	if len(m.snapshot.Repos) == 0 {
+	if len(m.snapshot.Sections) == 0 {
 		b.WriteString("No configured skills.\n")
 		return newStatusView(b.String())
 	}
@@ -1258,46 +1305,55 @@ func (m statusModel) View() tea.View {
 		return newStatusView(m.tagSelectView())
 	}
 	rowIndex := 0
-	for _, repo := range m.snapshot.Repos {
+	for si, sec := range m.snapshot.Sections {
+		// Section header row.
 		cursor := listCursor(rowIndex == m.cursor)
-		prefix := ""
-		suffix := ""
-		if repo.Upgrade {
-			prefix = " ⬆️"
+		if si > 0 {
+			b.WriteString("\n")
 		}
-		if repo.Checking {
-			prefix = ""
-			suffix = helpStyle.Render(" checking...")
-		} else if repo.Error != "" {
-			prefix = errStyle.Render(" check failed")
-		}
-		version := repo.Version
-		if version == "" {
-			version = "HEAD"
-		}
-		fmt.Fprintf(&b, "%s%s%s (%s)%s\n", cursor, titleStyle.Render(repo.Name), prefix, version, suffix)
-		if repo.Error != "" {
-			fmt.Fprintf(&b, "    %s\n", errStyle.Render(repo.Error))
-		}
+		fmt.Fprintf(&b, "%s%s\n", cursor, titleStyle.Render("── "+sec.Title+" ──"))
 		rowIndex++
-		for _, skill := range repo.Skills {
+		for _, repo := range sec.Repos {
 			cursor := listCursor(rowIndex == m.cursor)
-			twist := "▸"
-			if m.expanded[skill.ID] {
-				twist = "▾"
+			prefix := ""
+			suffix := ""
+			if repo.Upgrade {
+				prefix = " ⬆️"
 			}
-			fmt.Fprintf(&b, "%s  %s %s %-18s %s\n", cursor, paddedStatusEmoji(skill.Status), twist, skill.Name, skill.Path)
-			if m.expanded[skill.ID] {
-				desc := strings.TrimSpace(skill.Description)
-				if desc == "" {
-					desc = "(no description)"
-				}
-				for _, line := range wrapDescriptionLines(desc, "      ", m.width) {
-					b.WriteString(line)
-					b.WriteString("\n")
-				}
+			if repo.Checking {
+				prefix = ""
+				suffix = helpStyle.Render(" checking...")
+			} else if repo.Error != "" {
+				prefix = errStyle.Render(" check failed")
+			}
+			version := repo.Version
+			if version == "" {
+				version = "HEAD"
+			}
+			fmt.Fprintf(&b, "%s%s%s (%s)%s\n", cursor, titleStyle.Render(repo.Name), prefix, version, suffix)
+			if repo.Error != "" {
+				fmt.Fprintf(&b, "    %s\n", errStyle.Render(repo.Error))
 			}
 			rowIndex++
+			for _, skill := range repo.Skills {
+				cursor := listCursor(rowIndex == m.cursor)
+				twist := "▸"
+				if m.expanded[skill.ID] {
+					twist = "▾"
+				}
+				fmt.Fprintf(&b, "%s  %s %s %-18s %s\n", cursor, paddedStatusEmoji(skill.Status), twist, skill.Name, skill.Path)
+				if m.expanded[skill.ID] {
+					desc := strings.TrimSpace(skill.Description)
+					if desc == "" {
+						desc = "(no description)"
+					}
+					for _, line := range wrapDescriptionLines(desc, "      ", m.width) {
+						b.WriteString(line)
+						b.WriteString("\n")
+					}
+				}
+				rowIndex++
+			}
 		}
 	}
 	b.WriteString("\n")

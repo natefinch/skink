@@ -67,6 +67,7 @@ type App struct {
 	Prompter Prompter
 	Out      io.Writer
 	Err      io.Writer
+	Global   bool
 }
 
 func (a *App) defaults() {
@@ -114,6 +115,7 @@ func (a *App) Root() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show git command output")
+	root.PersistentFlags().BoolVar(&a.Global, "global", false, "Operate on global skills (~/.skink config)")
 	root.AddCommand(
 		a.cmdSync(),
 	)
@@ -378,6 +380,9 @@ func (a *App) cmdSync() *cobra.Command {
 		Use:   "sync",
 		Short: "Copy configured skills into the current project",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if a.Global {
+				return a.runGlobalSync(cmd.Context(), force)
+			}
 			lib, projectRoot, err := a.projectLibrary(cmd.Context())
 			if err != nil {
 				return err
@@ -409,6 +414,48 @@ func (a *App) cmdSync() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "overwrite existing skill directories that differ from the cache")
 	return cmd
+}
+
+func (a *App) runGlobalSync(ctx context.Context, force bool) error {
+	layout, err := paths.Resolve(a.Env)
+	if err != nil {
+		return err
+	}
+	cfg, found, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("no global skink config found in %s", layout.SkinkHome)
+	}
+	lib, err := skillrepo.NewLibrary(layout.SkinkHome, layout.SkinkHome, a.Git)
+	if err != nil {
+		return err
+	}
+	lib.Config = cfg
+	if err := lib.EnsureCloned(ctx); err != nil {
+		return err
+	}
+	if err := a.pullLibrary(ctx, lib); err != nil {
+		return err
+	}
+	skills, err := lib.ListAll()
+	if err != nil {
+		return err
+	}
+	if len(skills) == 0 {
+		return fmt.Errorf("no skills found from global skink config in %s", layout.SkinkHome)
+	}
+	targetRoot := layout.GlobalSkillDir(cfg.SkillDir)
+	result, err := syncer.Sync(syncItemsForSkills(skills), targetRoot, force)
+	if err != nil {
+		return err
+	}
+	a.printSyncResult(layout.SkinkHome, result)
+	if len(result.Conflicts) > 0 {
+		return fmt.Errorf("sync conflicts: %d conflict(s); rerun with -f to overwrite conflicting skill directories", len(result.Conflicts))
+	}
+	return nil
 }
 
 func syncItemsForSkills(skills []skillrepo.Skill) []syncer.Item {

@@ -190,6 +190,12 @@ func SaveConfig(repoDir string, cfg Config) error {
 	if !ok {
 		path = filepath.Join(repoDir, ".skink.yaml")
 	}
+	return SaveConfigAt(path, cfg)
+}
+
+// SaveConfigAt writes cfg to the specified path. The file format is determined
+// by the file extension (.yaml, .yml, .json, or .toml).
+func SaveConfigAt(path string, cfg Config) error {
 	if err := validateConfig(cfg, path); err != nil {
 		return err
 	}
@@ -198,6 +204,7 @@ func SaveConfig(repoDir string, cfg Config) error {
 	}
 
 	var b []byte
+	var err error
 	switch filepath.Ext(path) {
 	case ".yaml", ".yml":
 		b, err = yaml.Marshal(cfg)
@@ -236,6 +243,20 @@ func SaveConfig(repoDir string, cfg Config) error {
 		return fmt.Errorf("skillrepo: rename config: %w", err)
 	}
 	return nil
+}
+
+// ReadGlobalImports reads the skink config from skinkHome (e.g. ~/.skink).
+// It returns the config, whether a config file was found, and any error.
+// A missing config is not an error — the caller gets (Config{}, false, nil).
+func ReadGlobalImports(skinkHome string) (Config, bool, error) {
+	cfg, err := ReadImports(skinkHome)
+	if err != nil {
+		if errors.Is(err, ErrConfigNotFound) {
+			return Config{}, false, nil
+		}
+		return Config{}, false, err
+	}
+	return cfg, true, nil
 }
 
 func validateConfig(cfg Config, found string) error {

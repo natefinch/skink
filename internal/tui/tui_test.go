@@ -34,6 +34,22 @@ func keyMsg(s string) tea.KeyPressMsg {
 	return tea.KeyPressMsg(tea.Key{Code: runes[0], Text: s})
 }
 
+// projectSnapshot wraps repos in a single project section for test convenience.
+func projectSnapshot(repos []StatusRepo) StatusSnapshot {
+	for i := range repos {
+		if repos[i].Scope == "" {
+			repos[i].Scope = ScopeProject
+		}
+	}
+	return StatusSnapshot{
+		Sections: []StatusSection{{
+			Scope: ScopeProject,
+			Title: "Project Skills",
+			Repos: repos,
+		}},
+	}
+}
+
 func TestTextModelEmptyRejected(t *testing.T) {
 	m := textModel{prompt: "x"}
 	updated, _ := m.Update(keyMsg("enter"))
@@ -423,15 +439,18 @@ func TestBrowseModelCtrlCCancels(t *testing.T) {
 }
 
 func TestStatusModelRepoActions(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:      "github.com/acme/team",
 		Name:    "github.com/acme/team",
 		Version: "v1.0.0",
 		Upgrade: true,
 		Tags:    []StatusTag{{Name: "v1.1.0"}, {Name: "v1.0.0"}},
 		Skills:  []StatusSkill{{ID: "skill", Name: "alpha", Path: "skills/alpha", Status: "missing"}},
-	}}}, nil)
-	next, _ := m.Update(keyMsg("t"))
+	}}), nil)
+	// Move past section header to repo row.
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("t"))
 	m = next.(statusModel)
 	if !m.tagSelect {
 		t.Fatal("t on repo should enter tag selection")
@@ -442,21 +461,25 @@ func TestStatusModelRepoActions(t *testing.T) {
 		t.Fatalf("tag action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	m = newStatusModel("status", projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}}), nil)
+	next, _ = m.Update(keyMsg("down")) // past section header
+	m = next.(statusModel)
 	next, cmd = m.Update(keyMsg("u"))
 	m = next.(statusModel)
 	if cmd == nil || m.action.Kind != StatusActionNext || m.action.RepoID != "repo" {
 		t.Fatalf("next action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m = newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
 		BrowseItems: []BrowseItem{
 			{Name: "alpha", Path: "alpha", Selected: true},
 			{Name: "beta", Path: "beta"},
 		},
-	}}}, nil)
+	}}), nil)
+	next, _ = m.Update(keyMsg("down")) // past section header
+	m = next.(statusModel)
 	next, cmd = m.Update(keyMsg("c"))
 	m = next.(statusModel)
 	if cmd != nil || m.browse == nil {
@@ -468,7 +491,8 @@ func TestStatusModelRepoActions(t *testing.T) {
 		t.Fatalf("choose skills action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	m = newStatusModel("status", projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}}), nil)
+	// "a" works on section header too.
 	next, cmd = m.Update(keyMsg("a"))
 	m = next.(statusModel)
 	if cmd == nil || m.addRepo == nil {
@@ -486,7 +510,7 @@ func TestStatusModelRepoActions(t *testing.T) {
 }
 
 func TestStatusModelAddRepoEscReturnsToStatusView(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}}), nil)
 	next, cmd := m.Update(keyMsg("a"))
 	m = next.(statusModel)
 	if cmd == nil || m.addRepo == nil {
@@ -500,7 +524,7 @@ func TestStatusModelAddRepoEscReturnsToStatusView(t *testing.T) {
 }
 
 func TestStatusModelAddRepoAcceptsPaste(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil)
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}}), nil)
 	next, _ := m.Update(keyMsg("a"))
 	m = next.(statusModel)
 	next, _ = m.Update(tea.PasteMsg{Content: "github.com/acme/pasted"})
@@ -527,12 +551,11 @@ func TestStatusModelAddRepoRunsInsideStatusView(t *testing.T) {
 	}
 	apply := func(action StatusAction) (StatusSnapshot, error) {
 		gotApply = action
-		return StatusSnapshot{
-			Repos:   []StatusRepo{{ID: "github.com/acme/new", Name: "github.com/acme/new"}},
-			Message: "added skills from github.com/acme/new",
-		}, nil
+		snap := projectSnapshot([]StatusRepo{{ID: "github.com/acme/new", Name: "github.com/acme/new"}})
+		snap.Message = "added skills from github.com/acme/new"
+		return snap, nil
 	}
-	m := newStatusModelWithApply("status", StatusSnapshot{Repos: []StatusRepo{{ID: "repo", Name: "repo"}}}, nil, addRepo, apply)
+	m := newStatusModelWithApply("status", projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}}), nil, addRepo, apply)
 	next, _ := m.Update(keyMsg("a"))
 	m = next.(statusModel)
 	m.addRepo.input.SetValue("github.com/acme/new")
@@ -562,11 +585,14 @@ func TestStatusModelAddRepoRunsInsideStatusView(t *testing.T) {
 }
 
 func TestStatusModelChooseSkillsEscReturnsToStatusView(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:          "repo",
 		Name:        "repo",
 		BrowseItems: []BrowseItem{{Name: "alpha", Path: "alpha"}},
-	}}}, nil)
+	}}), nil)
+	// Move past section header to repo.
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
 	next, cmd := m.Update(keyMsg("c"))
 	m = next.(statusModel)
 	if cmd != nil || m.browse == nil {
@@ -580,12 +606,15 @@ func TestStatusModelChooseSkillsEscReturnsToStatusView(t *testing.T) {
 }
 
 func TestStatusModelWaitsForRepoChecksBeforeTagActions(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:       "repo",
 		Name:     "repo",
 		Version:  "v1.0.0",
 		Checking: true,
-	}}}, nil)
+	}}), nil)
+	// Move past section header to repo.
+	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
 	next, cmd := m.Update(keyMsg("t"))
 	m = next.(statusModel)
 	if cmd != nil || m.tagSelect || !strings.Contains(m.err, "still checking") {
@@ -600,12 +629,12 @@ func TestStatusModelWaitsForRepoChecksBeforeTagActions(t *testing.T) {
 }
 
 func TestStatusViewShowsCheckingAfterVersion(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:       "repo",
 		Name:     "repo",
 		Version:  "v1.0.0",
 		Checking: true,
-	}}}, nil)
+	}}), nil)
 	content := m.View().Content
 	versionIndex := strings.Index(content, "(v1.0.0)")
 	checkingIndex := strings.Index(content, "checking...")
@@ -618,19 +647,19 @@ func TestStatusViewShowsCheckingAfterVersion(t *testing.T) {
 }
 
 func TestStatusModelAppliesAsyncUpdate(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:       "repo",
 		Name:     "repo",
 		Version:  "v1.0.0",
 		Checking: true,
-	}}}, func() StatusSnapshot {
-		return StatusSnapshot{Repos: []StatusRepo{{
+	}}), func() StatusSnapshot {
+		return projectSnapshot([]StatusRepo{{
 			ID:      "repo",
 			Name:    "repo",
 			Version: "v1.0.0",
 			Upgrade: true,
 			Tags:    []StatusTag{{Name: "v1.1.0"}},
-		}}}
+		}})
 	})
 	cmd := m.Init()
 	if cmd == nil {
@@ -638,16 +667,16 @@ func TestStatusModelAppliesAsyncUpdate(t *testing.T) {
 	}
 	next, _ := m.Update(cmd())
 	m = next.(statusModel)
-	if m.snapshot.Repos[0].Checking || !m.snapshot.Repos[0].Upgrade || m.snapshot.Repos[0].Tags[0].Name != "v1.1.0" {
-		t.Fatalf("snapshot not updated: %+v", m.snapshot.Repos)
+	if m.snapshot.Sections[0].Repos[0].Checking || !m.snapshot.Sections[0].Repos[0].Upgrade || m.snapshot.Sections[0].Repos[0].Tags[0].Name != "v1.1.0" {
+		t.Fatalf("snapshot not updated: %+v", m.snapshot.Sections[0].Repos)
 	}
 }
 
 func TestStatusViewUsesAltScreen(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
-	}}}, nil)
+	}}), nil)
 	view := m.View()
 	if !view.AltScreen {
 		t.Fatal("status view should use alt screen for in-place refresh")
@@ -658,10 +687,10 @@ func TestStatusViewUsesAltScreen(t *testing.T) {
 }
 
 func TestStatusViewUsesLizardCursor(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
-	}}}, nil)
+	}}), nil)
 	content := m.View().Content
 	if !strings.Contains(content, "🦎") {
 		t.Fatalf("status view should use lizard cursor:\n%s", content)
@@ -672,10 +701,10 @@ func TestStatusViewUsesLizardCursor(t *testing.T) {
 }
 
 func TestStatusViewHelpIsSplitByTopic(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
-	}}}, nil)
+	}}), nil)
 	content := m.View().Content
 	for _, want := range []string{
 		"move: ↑/↓ • q/esc quit",
@@ -692,13 +721,16 @@ func TestStatusViewHelpIsSplitByTopic(t *testing.T) {
 }
 
 func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID: "repo",
 		Skills: []StatusSkill{
 			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
 		},
-	}}}, nil)
+	}}), nil)
+	// Move past section header and repo to skill.
 	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, cmd := m.Update(keyMsg("s"))
 	m = next.(statusModel)
@@ -706,12 +738,15 @@ func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
 		t.Fatalf("sync action = %+v cmd=%v", m.action, cmd)
 	}
 
-	m = newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m = newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID: "repo",
 		Skills: []StatusSkill{
 			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
 		},
-	}}}, nil)
+	}}), nil)
+	// Move past section header and repo to skill.
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
 	next, _ = m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, cmd = m.Update(keyMsg("d"))
@@ -734,7 +769,7 @@ func TestStatusModelSkillActionsAndDeleteConfirm(t *testing.T) {
 }
 
 func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
 		Skills: []StatusSkill{{
@@ -744,7 +779,7 @@ func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
 			Description: "first second third fourth",
 			Status:      "up to date",
 		}},
-	}}}, nil)
+	}}), nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 24, Height: 20})
 	m = next.(statusModel)
 
@@ -752,6 +787,9 @@ func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
 	if strings.Contains(content, "first second") {
 		t.Fatalf("collapsed skill should hide description:\n%s", content)
 	}
+	// Move past section header and repo to skill.
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
 	next, _ = m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, _ = m.Update(keyMsg("right"))
@@ -771,7 +809,7 @@ func TestStatusModelExpandsAndWrapsSkillDescription(t *testing.T) {
 }
 
 func TestStatusModelDifferentStatusHasSpaceAfterWarningEmoji(t *testing.T) {
-	m := newStatusModel("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
 		ID:   "repo",
 		Name: "repo",
 		Skills: []StatusSkill{{
@@ -780,7 +818,7 @@ func TestStatusModelDifferentStatusHasSpaceAfterWarningEmoji(t *testing.T) {
 			Path:   "skills/alpha",
 			Status: "different",
 		}},
-	}}}, nil)
+	}}), nil)
 
 	content := m.View().Content
 	if !strings.Contains(content, "⚠️  ▸ alpha") {
@@ -792,18 +830,20 @@ func TestStatusModelDeleteAppliesInPlace(t *testing.T) {
 	var got StatusAction
 	apply := func(action StatusAction) (StatusSnapshot, error) {
 		got = action
-		return StatusSnapshot{
-			Repos:   []StatusRepo{{ID: "repo", Name: "repo"}},
-			Message: "deleted alpha",
-		}, nil
+		snap := projectSnapshot([]StatusRepo{{ID: "repo", Name: "repo"}})
+		snap.Message = "deleted alpha"
+		return snap, nil
 	}
-	m := newStatusModelWithApply("status", StatusSnapshot{Repos: []StatusRepo{{
+	m := newStatusModelWithApply("status", projectSnapshot([]StatusRepo{{
 		ID: "repo",
 		Skills: []StatusSkill{
 			{ID: "alpha", Name: "alpha", Path: "skills/alpha", Status: "up to date"},
 		},
-	}}}, nil, nil, apply)
+	}}), nil, nil, apply)
+	// Move past section header and repo to skill.
 	next, _ := m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("down"))
 	m = next.(statusModel)
 	next, _ = m.Update(keyMsg("d"))
 	m = next.(statusModel)

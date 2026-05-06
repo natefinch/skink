@@ -287,10 +287,10 @@ imports:
 		t.Fatalf("status snapshots = %d", len(p.statusItems))
 	}
 	snap := p.statusItems[0]
-	if len(snap.Repos) != 1 || snap.Repos[0].Name != "github.com/acme/team" {
-		t.Fatalf("unexpected repos: %+v", snap.Repos)
+	if len(snap.Repos()) != 1 || snap.Repos()[0].Name != "github.com/acme/team" {
+		t.Fatalf("unexpected repos: %+v", snap.Repos())
 	}
-	got := snap.Repos[0].Skills
+	got := snap.Repos()[0].Skills
 	if len(got) != 3 {
 		t.Fatalf("skills = %+v", got)
 	}
@@ -331,18 +331,18 @@ imports:
 		if len(g.fetchDirs) != 0 {
 			t.Fatalf("remote checks started before initial status render: %v", g.fetchDirs)
 		}
-		if len(snapshot.Repos) != 1 || !snapshot.Repos[0].Checking {
-			t.Fatalf("initial status should mark repo as checking: %+v", snapshot.Repos)
+		if len(snapshot.Repos()) != 1 || !snapshot.Repos()[0].Checking {
+			t.Fatalf("initial status should mark repo as checking: %+v", snapshot.Repos())
 		}
-		if snapshot.Repos[0].Upgrade || len(snapshot.Repos[0].Tags) != 0 {
-			t.Fatalf("initial status should not wait for remote tag data: %+v", snapshot.Repos[0])
+		if snapshot.Repos()[0].Upgrade || len(snapshot.Repos()[0].Tags) != 0 {
+			t.Fatalf("initial status should not wait for remote tag data: %+v", snapshot.Repos()[0])
 		}
 	}
 
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.statusItems) != 1 || p.statusItems[0].Repos[0].Checking || !p.statusItems[0].Repos[0].Upgrade {
+	if len(p.statusItems) != 1 || p.statusItems[0].Repos()[0].Checking || !p.statusItems[0].Repos()[0].Upgrade {
 		t.Fatalf("updated status should include remote check result: %+v", p.statusItems)
 	}
 }
@@ -370,7 +370,7 @@ imports:
 		t.Fatal(err)
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionSync, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|alpha"},
+		{Kind: tui.StatusActionSync, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|alpha"},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -383,8 +383,8 @@ imports:
 	if len(p.statusItems) != 2 {
 		t.Fatalf("status should refresh after sync, snapshots=%d", len(p.statusItems))
 	}
-	if p.statusItems[1].Repos[0].Skills[0].Status != "up to date" {
-		t.Fatalf("refreshed status = %+v", p.statusItems[1].Repos[0].Skills)
+	if p.statusItems[1].Repos()[0].Skills[0].Status != "up to date" {
+		t.Fatalf("refreshed status = %+v", p.statusItems[1].Repos()[0].Skills)
 	}
 }
 
@@ -411,14 +411,14 @@ imports:
 		t.Fatal(err)
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionDelete, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|alpha"},
+		{Kind: tui.StatusActionDelete, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|alpha"},
 		{Kind: tui.StatusActionQuit},
 	}
 
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.statusItems) != 2 || len(p.statusItems[1].Repos) != 0 {
+	if len(p.statusItems) != 2 || len(p.statusItems[1].Repos()) != 0 {
 		t.Fatalf("status should refresh to empty page after delete: %+v", p.statusItems)
 	}
 	if _, err := os.Stat(filepath.Join(proj, "skills", "alpha")); !os.IsNotExist(err) {
@@ -456,7 +456,7 @@ imports:
 		t.Fatal(err)
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionDelete, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|skills/alpha"},
+		{Kind: tui.StatusActionDelete, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", SkillID: "github.com/acme/team|skills/alpha"},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -491,18 +491,18 @@ imports:
 		}
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{1, 2}},
+		{Kind: tui.StatusActionChooseSkills, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", Selected: []int{1, 2}},
 		{Kind: tui.StatusActionQuit},
 	}
 
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	items := p.statusItems[0].Repos[0].BrowseItems
+	items := p.statusItems[0].Repos()[0].BrowseItems
 	if len(items) != 3 || items[0].Name != "All skills" || items[0].Path != "*" || !items[1].Selected || items[2].Selected {
 		t.Fatalf("expected existing skill prechecked in status browse data: %+v", items)
 	}
-	skills := p.statusItems[0].Repos[0].Skills
+	skills := p.statusItems[0].Repos()[0].Skills
 	if len(skills) != 1 || skills[0].Description != "alpha." {
 		t.Fatalf("expected status skill description from repo metadata: %+v", skills)
 	}
@@ -540,14 +540,14 @@ imports:
 		}
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionChooseSkills, RepoID: "github.com/acme/team", Selected: []int{0}},
+		{Kind: tui.StatusActionChooseSkills, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", Selected: []int{0}},
 		{Kind: tui.StatusActionQuit},
 	}
 
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	items := p.statusItems[0].Repos[0].BrowseItems
+	items := p.statusItems[0].Repos()[0].BrowseItems
 	if len(items) != 3 || items[0].Name != "All skills" || items[0].Path != "packs/*" {
 		t.Fatalf("expected all-skills wildcard row first: %+v", items)
 	}
@@ -586,7 +586,7 @@ imports:
 		"beta/SKILL.md": "---\nname: beta\ndescription: Beta.\n---\n",
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionAddRepo, URL: "github.com/acme/new", Selected: []int{0}},
+		{Kind: tui.StatusActionAddRepo, Scope: tui.ScopeProject, URL: "github.com/acme/new", Selected: []int{0}},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -636,7 +636,7 @@ imports:
 		tagOutputKey(importDir): "v1.1.0\x002026-01-02T00:00:00Z\nv1.0.0\x002026-01-01T00:00:00Z\n",
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionUpdateTag, RepoID: "github.com/acme/team", Tag: "v1.1.0"},
+		{Kind: tui.StatusActionUpdateTag, Scope: tui.ScopeProject, RepoID: "github.com/acme/team", Tag: "v1.1.0"},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -681,10 +681,10 @@ imports:
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos) != 1 {
+	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos()) != 1 {
 		t.Fatalf("status snapshots = %+v", p.statusItems)
 	}
-	repo := p.statusItems[0].Repos[0]
+	repo := p.statusItems[0].Repos()[0]
 	if !repo.Upgrade {
 		t.Fatalf("repo should show update from remote tags: %+v", repo)
 	}
@@ -718,10 +718,10 @@ imports:
 	if err := run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos) != 1 {
+	if len(p.statusItems) != 1 || len(p.statusItems[0].Repos()) != 1 {
 		t.Fatalf("status snapshots = %+v", p.statusItems)
 	}
-	repo := p.statusItems[0].Repos[0]
+	repo := p.statusItems[0].Repos()[0]
 	if repo.Upgrade {
 		t.Fatalf("repo should not show an update when already on newest tag: %+v", repo)
 	}
@@ -757,7 +757,7 @@ imports:
 		tagOutputKey(importDir): "v1.2.0\x002026-01-03T00:00:00Z\nv1.1.0\x002026-01-02T00:00:00Z\nv1.0.0\x002026-01-01T00:00:00Z\n",
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionNext, RepoID: "github.com/acme/team"},
+		{Kind: tui.StatusActionNext, Scope: tui.ScopeProject, RepoID: "github.com/acme/team"},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -790,7 +790,7 @@ imports:
 		gitOutputKey(importDir, "ls-remote", "origin", "HEAD"): "remote\tHEAD\n",
 	}
 	p.statusActions = []tui.StatusAction{
-		{Kind: tui.StatusActionNext, RepoID: "github.com/acme/team"},
+		{Kind: tui.StatusActionNext, Scope: tui.ScopeProject, RepoID: "github.com/acme/team"},
 		{Kind: tui.StatusActionQuit},
 	}
 
@@ -800,7 +800,7 @@ imports:
 	if len(g.pullDirs) == 0 || g.pullDirs[len(g.pullDirs)-1] != importDir {
 		t.Fatalf("pull dirs = %v", g.pullDirs)
 	}
-	if len(p.statusItems) == 0 || !p.statusItems[0].Repos[0].Upgrade {
+	if len(p.statusItems) == 0 || !p.statusItems[0].Repos()[0].Upgrade {
 		t.Fatalf("expected upgrade indicator for changed remote head: %+v", p.statusItems)
 	}
 }
@@ -966,5 +966,240 @@ imports:
 	}
 	if !strings.Contains(out.String(), "overwritten:") {
 		t.Fatalf("unexpected overwrite output: %q", out.String())
+	}
+}
+
+func writeGlobalConfig(t *testing.T, home, body string) {
+	t.Helper()
+	skinkHome := filepath.Join(home, ".skink")
+	if err := os.MkdirAll(skinkHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skinkHome, ".skink.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGlobalSyncSyncsGlobalSkills(t *testing.T) {
+	app, home, _, _, _, out := setup(t)
+	writeGlobalConfig(t, home, `
+skilldir = ".agent/skills"
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["alpha"]
+`)
+	importDir := seedImport(t, home, "github.com", "acme", "global-skills")
+	if err := os.MkdirAll(filepath.Join(importDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(importDir, "alpha", "SKILL.md"), []byte("global alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(t, app, "sync", "--global"); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, ".agent", "skills", "alpha", "SKILL.md")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected global skill synced to %s: %v", dest, err)
+	}
+	if string(got) != "global alpha\n" {
+		t.Fatalf("global skill content = %q", got)
+	}
+	if !strings.Contains(out.String(), "added:") {
+		t.Fatalf("expected sync output, got %q", out.String())
+	}
+}
+
+func TestGlobalSyncErrorsWithoutConfig(t *testing.T) {
+	app, _, _, _, _, _ := setup(t)
+	err := run(t, app, "sync", "--global")
+	if err == nil || !strings.Contains(err.Error(), "no global skink config") {
+		t.Fatalf("sync --global without config should error, got %v", err)
+	}
+}
+
+func TestGlobalBootstrapCreatesConfig(t *testing.T) {
+	app, home, _, _, p, out := setup(t)
+	app.Global = true
+	// No project config, no global config — bootstrap should create it.
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app, "--global"); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".skink", ".skink.toml")
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("bootstrap should create global config at %s: %v", configPath, err)
+	}
+	if !strings.Contains(out.String(), "Created global config") {
+		t.Fatalf("bootstrap should log creation, got %q", out.String())
+	}
+}
+
+func TestStatusShowsGlobalAndProjectSections(t *testing.T) {
+	app, home, proj, _, p, _ := setup(t)
+	writeGlobalConfig(t, home, `
+skilldir = ".agent/skills"
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["g-alpha"]
+`)
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - p-alpha
+`)
+	globalDir := seedImport(t, home, "github.com", "acme", "global-skills")
+	if err := os.MkdirAll(filepath.Join(globalDir, "g-alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "g-alpha", "SKILL.md"), []byte("global\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := seedImport(t, home, "github.com", "acme", "team")
+	if err := os.MkdirAll(filepath.Join(projectDir, "p-alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "p-alpha", "SKILL.md"), []byte("project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statusItems) == 0 {
+		t.Fatal("expected at least one status snapshot")
+	}
+	snap := p.statusItems[0]
+	if len(snap.Sections) != 2 {
+		t.Fatalf("expected 2 sections (global + project), got %d", len(snap.Sections))
+	}
+	if snap.Sections[0].Scope != tui.ScopeGlobal || snap.Sections[0].Title != "Global Skills" {
+		t.Fatalf("first section should be Global Skills, got %+v", snap.Sections[0])
+	}
+	if snap.Sections[1].Scope != tui.ScopeProject || snap.Sections[1].Title != "Project Skills" {
+		t.Fatalf("second section should be Project Skills, got %+v", snap.Sections[1])
+	}
+}
+
+func TestStatusShowsGlobalOnlyWithoutProjectConfig(t *testing.T) {
+	app, home, _, _, p, _ := setup(t)
+	writeGlobalConfig(t, home, `
+skilldir = ".agent/skills"
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["alpha"]
+`)
+	globalDir := seedImport(t, home, "github.com", "acme", "global-skills")
+	if err := os.MkdirAll(filepath.Join(globalDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "alpha", "SKILL.md"), []byte("global\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statusItems) == 0 {
+		t.Fatal("expected status snapshot")
+	}
+	snap := p.statusItems[0]
+	if len(snap.Sections) != 1 || snap.Sections[0].Scope != tui.ScopeGlobal {
+		t.Fatalf("expected global-only section, got %+v", snap.Sections)
+	}
+}
+
+func TestDuplicateSkillWarning(t *testing.T) {
+	app, home, proj, _, p, _ := setup(t)
+	writeGlobalConfig(t, home, `
+skilldir = ".agent/skills"
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["alpha"]
+`)
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - alpha
+`)
+	globalDir := seedImport(t, home, "github.com", "acme", "global-skills")
+	if err := os.MkdirAll(filepath.Join(globalDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "alpha", "SKILL.md"), []byte("global\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := seedImport(t, home, "github.com", "acme", "team")
+	if err := os.MkdirAll(filepath.Join(projectDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "alpha", "SKILL.md"), []byte("project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.statusItems) == 0 {
+		t.Fatal("expected status snapshot")
+	}
+	snap := p.statusItems[0]
+	if !strings.Contains(snap.Message, "Duplicate") || !strings.Contains(snap.Message, "alpha") {
+		t.Fatalf("expected duplicate skill warning, got message=%q", snap.Message)
+	}
+}
+
+func TestGlobalSkillDirResolution(t *testing.T) {
+	app, home, _, _, p, _ := setup(t)
+	// Custom global skilldir.
+	writeGlobalConfig(t, home, `
+skilldir = ".custom/agent/skills"
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["alpha"]
+`)
+	globalDir := seedImport(t, home, "github.com", "acme", "global-skills")
+	if err := os.MkdirAll(filepath.Join(globalDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalDir, "alpha", "SKILL.md"), []byte("custom\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(t, app, "sync", "--global"); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, ".custom", "agent", "skills", "alpha", "SKILL.md")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected skill synced to custom dir %s: %v", dest, err)
+	}
+	if string(got) != "custom\n" {
+		t.Fatalf("skill content = %q", got)
+	}
+
+	// Also test default via the status path.
+	writeGlobalConfig(t, home, `
+[[imports]]
+  url = "https://github.com/acme/global-skills/"
+  dirs = ["alpha"]
+`)
+	app.Global = true
+	p.statusActions = []tui.StatusAction{{Kind: tui.StatusActionQuit}}
+	if err := run(t, app, "--global"); err != nil {
+		t.Fatal(err)
+	}
+	// With no skilldir set, default should resolve to $HOME/.agent/skills.
+	if len(p.statusItems) == 0 {
+		t.Fatal("expected status snapshot")
 	}
 }

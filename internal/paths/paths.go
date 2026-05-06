@@ -46,10 +46,23 @@ func (f FakeEnv) Getwd() (string, error) {
 	return f.Wd, nil
 }
 
+// DefaultGlobalSkillDir is the default skill directory for global skills,
+// relative to the user's home directory.
+const DefaultGlobalSkillDir = ".agent/skills"
+
 // Layout holds the resolved skink paths.
 type Layout struct {
 	Home      string // user home, e.g. /Users/me
 	SkinkHome string // ~/.skink cache for external source clones
+}
+
+// GlobalSkillDir resolves the global skill directory. If skilldir is empty,
+// it uses DefaultGlobalSkillDir. The result is an absolute path under Home.
+func (l Layout) GlobalSkillDir(skilldir string) string {
+	if skilldir == "" {
+		skilldir = DefaultGlobalSkillDir
+	}
+	return filepath.Join(l.Home, skilldir)
 }
 
 // Resolve builds a Layout from the given Env.

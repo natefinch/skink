@@ -51,3 +51,13 @@ func TestProjectRoot(t *testing.T) {
 		t.Error("empty wd should error")
 	}
 }
+
+func TestGlobalSkillDir(t *testing.T) {
+	l := Layout{Home: "/u/me", SkinkHome: "/u/me/.skink"}
+	if got := l.GlobalSkillDir(""); got != filepath.Join("/u/me", DefaultGlobalSkillDir) {
+		t.Errorf("default global skill dir = %q", got)
+	}
+	if got := l.GlobalSkillDir(".custom/skills"); got != filepath.Join("/u/me", ".custom/skills") {
+		t.Errorf("custom global skill dir = %q", got)
+	}
+}

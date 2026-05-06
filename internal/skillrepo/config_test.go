@@ -345,3 +345,64 @@ func TestGitURLSegments(t *testing.T) {
 		t.Errorf("DisplayPath = %q", got)
 	}
 }
+
+func TestReadGlobalImportsMissing(t *testing.T) {
+	cfg, found, err := ReadGlobalImports(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("missing config should return found=false")
+	}
+	if len(cfg.Imports) != 0 {
+		t.Errorf("unexpected imports: %+v", cfg.Imports)
+	}
+}
+
+func TestReadGlobalImportsFound(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, ".skink.toml", `
+skilldir = ".agent/skills"
+[[imports]]
+  url = "https://github.com/acme/skills/"
+  dirs = ["alpha"]
+`)
+	cfg, found, err := ReadGlobalImports(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Error("existing config should return found=true")
+	}
+	if cfg.SkillDir != ".agent/skills" {
+		t.Errorf("skilldir = %q", cfg.SkillDir)
+	}
+	if len(cfg.Imports) != 1 {
+		t.Fatalf("imports = %+v", cfg.Imports)
+	}
+}
+
+func TestSaveConfigAt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.toml")
+	cfg := Config{
+		SkillDir: ".agent/skills",
+		Imports: []Import{{
+			URL:  "https://github.com/acme/skills/",
+			Dirs: []string{"alpha"},
+		}},
+	}
+	if err := SaveConfigAt(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), ".agent/skills") {
+		t.Fatalf("saved config should contain skilldir, got %q", got)
+	}
+	if !strings.Contains(string(got), "github.com/acme/skills") {
+		t.Fatalf("saved config should contain URL, got %q", got)
+	}
+}

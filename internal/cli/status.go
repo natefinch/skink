@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/natefinch/skink/internal/paths"
 	"github.com/natefinch/skink/internal/skillrepo"
@@ -13,15 +14,19 @@ import (
 	"github.com/natefinch/skink/internal/tui"
 )
 
+type statusScopePage struct {
+	root       string // project root (for project) or skink home (for global)
+	targetRoot string
+	config     skillrepo.Config
+	repos      map[string]statusRepoAction
+	addedRepos map[string]sourceSkillSelection
+	skills     map[string]statusSkillAction
+}
+
 type statusPage struct {
-	snapshot    tui.StatusSnapshot
-	skinkHome   string
-	projectRoot string
-	targetRoot  string
-	config      skillrepo.Config
-	repos       map[string]statusRepoAction
-	addedRepos  map[string]sourceSkillSelection
-	skills      map[string]statusSkillAction
+	snapshot  tui.StatusSnapshot
+	skinkHome string
+	scopes    map[tui.Scope]*statusScopePage
 }
 
 type statusRepoAction struct {
@@ -39,7 +44,26 @@ type statusSkillAction struct {
 	source    string
 }
 
+func (p statusPage) scopePage(scope tui.Scope) *statusScopePage {
+	return p.scopes[scope]
+}
+
 func (a *App) runStatus(ctx context.Context) error {
+	if a.Global {
+		layout, err := paths.Resolve(a.Env)
+		if err != nil {
+			return err
+		}
+		_, found, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
+		if err != nil {
+			return err
+		}
+		if !found {
+			if err := a.bootstrapGlobalConfig(ctx, layout); err != nil {
+				return err
+			}
+		}
+	}
 	page, err := a.buildStatusPage(ctx, "")
 	if err != nil {
 		return err
@@ -53,6 +77,17 @@ func (a *App) runStatus(ctx context.Context) error {
 		a.statusAddRepo(ctx, &page),
 		a.statusApply(ctx, &page),
 	)
+}
+
+func (a *App) bootstrapGlobalConfig(ctx context.Context, layout paths.Layout) error {
+	configPath := filepath.Join(layout.SkinkHome, ".skink.toml")
+	cfg := skillrepo.Config{SkillDir: paths.DefaultGlobalSkillDir}
+	if err := skillrepo.SaveConfigAt(configPath, cfg); err != nil {
+		return fmt.Errorf("create global config: %w", err)
+	}
+	fmt.Fprintf(a.Out, "Created global config at %s\n", configPath)
+	fmt.Fprintf(a.Out, "Skills will be synced to %s\n", layout.GlobalSkillDir(""))
+	return nil
 }
 
 func (a *App) statusApply(ctx context.Context, page *statusPage) tui.StatusApplyFunc {
@@ -78,53 +113,185 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 	if err != nil {
 		return statusPage{}, err
 	}
-	lib, projectRoot, err := a.projectLibrary(ctx)
+
+	page := statusPage{
+		skinkHome: layout.SkinkHome,
+		scopes:    map[tui.Scope]*statusScopePage{},
+	}
+	page.snapshot.Message = message
+
+	// Load global config if available.
+	if !a.Global {
+		// When not in --global mode, still try to load global for combined TUI.
+		globalCfg, globalFound, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
+		if err != nil {
+			return statusPage{}, err
+		}
+		if globalFound {
+			sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeGlobal, layout.SkinkHome, globalCfg)
+			if err != nil {
+				return statusPage{}, err
+			}
+			page.scopes[tui.ScopeGlobal] = sp
+			page.snapshot.Sections = append(page.snapshot.Sections, sec)
+		}
+	} else {
+		// --global mode: only global.
+		globalCfg, globalFound, err := skillrepo.ReadGlobalImports(layout.SkinkHome)
+		if err != nil {
+			return statusPage{}, err
+		}
+		if !globalFound {
+			// Bootstrap will be handled by the caller; return empty.
+			sp := &statusScopePage{
+				root:       layout.SkinkHome,
+				targetRoot: layout.GlobalSkillDir(""),
+				config:     skillrepo.Config{},
+				repos:      map[string]statusRepoAction{},
+				addedRepos: map[string]sourceSkillSelection{},
+				skills:     map[string]statusSkillAction{},
+			}
+			page.scopes[tui.ScopeGlobal] = sp
+			page.snapshot.Sections = append(page.snapshot.Sections, tui.StatusSection{
+				Scope: tui.ScopeGlobal,
+				Title: "Global Skills",
+			})
+			return page, nil
+		}
+		sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeGlobal, layout.SkinkHome, globalCfg)
+		if err != nil {
+			return statusPage{}, err
+		}
+		page.scopes[tui.ScopeGlobal] = sp
+		page.snapshot.Sections = append(page.snapshot.Sections, sec)
+		return page, nil
+	}
+
+	// Load project config.
+	projectRoot, err := paths.ProjectRoot(a.Env)
+	if err != nil {
+		// If we have global skills, show them alone.
+		if _, hasGlobal := page.scopes[tui.ScopeGlobal]; hasGlobal {
+			return page, nil
+		}
+		return statusPage{}, err
+	}
+	projectCfg, projectErr := skillrepo.ReadImports(projectRoot)
+	if projectErr != nil {
+		if errors.Is(projectErr, skillrepo.ErrConfigNotFound) {
+			// No project config — show global-only if available.
+			if _, hasGlobal := page.scopes[tui.ScopeGlobal]; hasGlobal {
+				return page, nil
+			}
+			return statusPage{}, fmt.Errorf("no skink config found in %s (expected .skink.yaml, .skink.yml, .skink.json, or .skink.toml)", projectRoot)
+		}
+		return statusPage{}, projectErr
+	}
+
+	sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeProject, projectRoot, projectCfg)
 	if err != nil {
 		return statusPage{}, err
 	}
+	page.scopes[tui.ScopeProject] = sp
+	page.snapshot.Sections = append(page.snapshot.Sections, sec)
+
+	// Check for duplicate skill names across scopes.
+	addDuplicateWarnings(&page)
+
+	return page, nil
+}
+
+// addDuplicateWarnings checks for skills with the same name across global and
+// project scopes and appends a warning to the snapshot message.
+func addDuplicateWarnings(page *statusPage) {
+	if len(page.snapshot.Sections) < 2 {
+		return
+	}
+	names := map[string]tui.Scope{}
+	var dupes []string
+	for _, sec := range page.snapshot.Sections {
+		for _, repo := range sec.Repos {
+			for _, skill := range repo.Skills {
+				if prev, ok := names[skill.Name]; ok && prev != sec.Scope {
+					dupes = append(dupes, skill.Name)
+				} else {
+					names[skill.Name] = sec.Scope
+				}
+			}
+		}
+	}
+	if len(dupes) == 0 {
+		return
+	}
+	msg := fmt.Sprintf("⚠️  Duplicate skill(s) in both global and project: %s", strings.Join(dupes, ", "))
+	if page.snapshot.Message != "" {
+		page.snapshot.Message += "\n"
+	}
+	page.snapshot.Message += msg
+}
+
+func (a *App) buildScopePage(
+	ctx context.Context,
+	layout paths.Layout,
+	scope tui.Scope,
+	root string,
+	cfg skillrepo.Config,
+) (*statusScopePage, tui.StatusSection, error) {
+	lib, err := skillrepo.NewLibrary(root, layout.SkinkHome, a.Git)
+	if err != nil {
+		return nil, tui.StatusSection{}, err
+	}
+	lib.Config = cfg
+	if err := lib.EnsureCloned(ctx); err != nil {
+		return nil, tui.StatusSection{}, err
+	}
+
 	skills, err := lib.ListAll()
 	if err != nil {
-		return statusPage{}, err
+		return nil, tui.StatusSection{}, err
 	}
+
+	title := "Project Skills"
+	if scope == tui.ScopeGlobal {
+		title = "Global Skills"
+	}
+
+	sp := &statusScopePage{
+		root:       root,
+		config:     cfg,
+		repos:      map[string]statusRepoAction{},
+		addedRepos: map[string]sourceSkillSelection{},
+		skills:     map[string]statusSkillAction{},
+	}
+	sec := tui.StatusSection{Scope: scope, Title: title}
+
 	if len(skills) == 0 {
-		return statusPage{
-			snapshot:    tui.StatusSnapshot{Message: message},
-			skinkHome:   layout.SkinkHome,
-			projectRoot: projectRoot,
-			config:      lib.Config,
-			repos:       map[string]statusRepoAction{},
-			addedRepos:  map[string]sourceSkillSelection{},
-			skills:      map[string]statusSkillAction{},
-		}, nil
+		return sp, sec, nil
 	}
-	targetRoot, err := a.resolveSkillDir(projectRoot, lib.Config)
-	if err != nil {
-		return statusPage{}, err
+
+	var targetRoot string
+	if scope == tui.ScopeGlobal {
+		targetRoot = layout.GlobalSkillDir(cfg.SkillDir)
+	} else {
+		targetRoot, err = a.resolveSkillDir(root, cfg)
+		if err != nil {
+			return nil, tui.StatusSection{}, err
+		}
 	}
+	sp.targetRoot = targetRoot
+
 	statuses, err := syncer.Check(syncItemsForSkills(skills), targetRoot)
 	if err != nil {
-		return statusPage{}, err
+		return nil, tui.StatusSection{}, err
 	}
 	statusByPath := map[string]syncer.Status{}
 	for _, st := range statuses {
 		statusByPath[st.Path] = st.Status
 	}
 
-	page := statusPage{
-		skinkHome:   layout.SkinkHome,
-		projectRoot: projectRoot,
-		targetRoot:  targetRoot,
-		config:      lib.Config,
-		repos:       map[string]statusRepoAction{},
-		addedRepos:  map[string]sourceSkillSelection{},
-		skills:      map[string]statusSkillAction{},
-	}
-	page.snapshot.Message = message
-
 	skillsByRepo := map[string][]skillrepo.Skill{}
 	for _, skill := range skills {
-		repoID := skill.Source
-		skillsByRepo[repoID] = append(skillsByRepo[repoID], skill)
+		skillsByRepo[skill.Source] = append(skillsByRepo[skill.Source], skill)
 	}
 
 	for _, src := range lib.Sources {
@@ -132,13 +299,14 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 		repoAction := statusRepoAction{source: src}
 		repo := tui.StatusRepo{
 			ID:       repoID,
+			Scope:    scope,
 			Name:     repoID,
 			Version:  src.Version,
 			Checking: true,
 		}
-		selection, err := sourceSkillSelectionFor(lib.Config, src.URL.Original, src.Repo)
-		if err != nil {
-			return statusPage{}, err
+		selection, selErr := sourceSkillSelectionFor(cfg, src.URL.Original, src.Repo)
+		if selErr != nil {
+			return nil, tui.StatusSection{}, selErr
 		}
 		if len(selection.discovered) == 0 {
 			repo.BrowseError = fmt.Sprintf("no SKILL.md files found in %s", src.Repo.Dir)
@@ -160,12 +328,12 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 			repo.Skills = append(repo.Skills, tui.StatusSkill{
 				ID:          skillID,
 				Name:        skill.Name,
-				Path:        displayPath(projectRoot, dest),
+				Path:        displayPath(root, dest),
 				SourceDir:   skill.SourceDir,
 				Description: descriptionByDir[skill.SourceDir],
 				Status:      string(status),
 			})
-			page.skills[skillID] = statusSkillAction{
+			sp.skills[skillID] = statusSkillAction{
 				repoID:    repoID,
 				name:      skill.Name,
 				sourceDir: skill.SourceDir,
@@ -174,20 +342,28 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 			}
 		}
 		sort.Slice(repo.Skills, func(i, j int) bool { return repo.Skills[i].Path < repo.Skills[j].Path })
-		page.repos[repoID] = repoAction
-		page.snapshot.Repos = append(page.snapshot.Repos, repo)
+		sp.repos[repoID] = repoAction
+		sec.Repos = append(sec.Repos, repo)
 	}
-	sort.Slice(page.snapshot.Repos, func(i, j int) bool { return page.snapshot.Repos[i].Name < page.snapshot.Repos[j].Name })
-	return page, nil
+	sort.Slice(sec.Repos, func(i, j int) bool { return sec.Repos[i].Name < sec.Repos[j].Name })
+	return sp, sec, nil
 }
 
 func statusUpdate(ctx context.Context, page statusPage) func() tui.StatusSnapshot {
-	if len(page.snapshot.Repos) == 0 {
+	allRepos := page.snapshot.Repos()
+	if len(allRepos) == 0 {
 		return nil
 	}
-	page.repos = cloneStatusRepoActions(page.repos)
+	// Collect all repo actions across scopes.
+	allRepoActions := make(map[string]statusRepoAction)
+	for _, sp := range page.scopes {
+		for id, action := range sp.repos {
+			allRepoActions[id] = action
+		}
+	}
+	repoActions := cloneStatusRepoActions(allRepoActions)
 	return func() tui.StatusSnapshot {
-		page = checkStatusPageRepos(ctx, page)
+		page = checkStatusPageRepos(ctx, page, repoActions)
 		return page.snapshot
 	}
 }
@@ -200,24 +376,26 @@ func cloneStatusRepoActions(in map[string]statusRepoAction) map[string]statusRep
 	return out
 }
 
-func checkStatusPageRepos(ctx context.Context, page statusPage) statusPage {
-	for i := range page.snapshot.Repos {
-		repoID := page.snapshot.Repos[i].ID
-		action, ok := page.repos[repoID]
-		if !ok {
-			continue
+func checkStatusPageRepos(ctx context.Context, page statusPage, repoActions map[string]statusRepoAction) statusPage {
+	for si := range page.snapshot.Sections {
+		for ri := range page.snapshot.Sections[si].Repos {
+			repoID := page.snapshot.Sections[si].Repos[ri].ID
+			action, ok := repoActions[repoID]
+			if !ok {
+				continue
+			}
+			tags, upgrade, latestSemver, semverComparable, err := statusRepoTags(ctx, action.source)
+			page.snapshot.Sections[si].Repos[ri].Checking = false
+			if err != nil {
+				page.snapshot.Sections[si].Repos[ri].Error = err.Error()
+				continue
+			}
+			action.latestSemverTag = latestSemver
+			action.semverComparable = semverComparable
+			repoActions[repoID] = action
+			page.snapshot.Sections[si].Repos[ri].Upgrade = upgrade
+			page.snapshot.Sections[si].Repos[ri].Tags = statusTags(tags)
 		}
-		tags, upgrade, latestSemver, semverComparable, err := statusRepoTags(ctx, action.source)
-		page.snapshot.Repos[i].Checking = false
-		if err != nil {
-			page.snapshot.Repos[i].Error = err.Error()
-			continue
-		}
-		action.latestSemverTag = latestSemver
-		action.semverComparable = semverComparable
-		page.repos[repoID] = action
-		page.snapshot.Repos[i].Upgrade = upgrade
-		page.snapshot.Repos[i].Tags = statusTags(tags)
 	}
 	return page
 }
@@ -286,14 +464,23 @@ func (a *App) statusAddRepo(ctx context.Context, page *statusPage) tui.StatusAdd
 		if err != nil {
 			return tui.StatusAddRepoResult{}, err
 		}
-		selection, err := sourceSkillSelectionFor(page.config, gitURL.Original, repo)
+		// Use the first available scope page's config for existing import check.
+		var cfg skillrepo.Config
+		for _, sp := range page.scopes {
+			cfg = sp.config
+			break
+		}
+		selection, err := sourceSkillSelectionFor(cfg, gitURL.Original, repo)
 		if err != nil {
 			return tui.StatusAddRepoResult{}, err
 		}
 		if len(selection.discovered) == 0 {
 			return tui.StatusAddRepoResult{}, fmt.Errorf("no SKILL.md files found in %s", repo.Dir)
 		}
-		page.addedRepos[gitURL.Original] = selection
+		// Store in all scope pages for lookup during apply.
+		for _, sp := range page.scopes {
+			sp.addedRepos[gitURL.Original] = selection
+		}
 		return tui.StatusAddRepoResult{URL: gitURL.Original, Items: selection.items}, nil
 	}
 }
@@ -318,11 +505,15 @@ func (a *App) handleStatusAction(ctx context.Context, page statusPage, action tu
 }
 
 func (a *App) handleStatusSync(page statusPage, action tui.StatusAction) (string, error) {
-	skill, ok := page.skills[action.SkillID]
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
+	skill, ok := sp.skills[action.SkillID]
 	if !ok {
 		return "", fmt.Errorf("unknown skill action %q", action.SkillID)
 	}
-	result, err := syncer.Sync([]syncer.Item{{Name: skill.name, Source: skill.source}}, page.targetRoot, true)
+	result, err := syncer.Sync([]syncer.Item{{Name: skill.name, Source: skill.source}}, sp.targetRoot, true)
 	if err != nil {
 		return "", err
 	}
@@ -333,51 +524,63 @@ func (a *App) handleStatusSync(page statusPage, action tui.StatusAction) (string
 }
 
 func (a *App) handleStatusDelete(page statusPage, action tui.StatusAction) (string, error) {
-	skill, ok := page.skills[action.SkillID]
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
+	skill, ok := sp.skills[action.SkillID]
 	if !ok {
 		return "", fmt.Errorf("unknown skill action %q", action.SkillID)
 	}
-	cfg, err := skillrepo.RemoveRepoDir(page.config, skill.sourceURL, skill.sourceDir)
+	cfg, err := skillrepo.RemoveRepoDir(sp.config, skill.sourceURL, skill.sourceDir)
 	if err != nil {
 		if errors.Is(err, skillrepo.ErrWildcardRemove) {
 			return fmt.Sprintf("cannot delete %s: it is included by a wildcard import", skill.name), nil
 		}
 		return "", err
 	}
-	if err := skillrepo.SaveConfig(page.projectRoot, cfg); err != nil {
+	if err := skillrepo.SaveConfig(sp.root, cfg); err != nil {
 		return "", err
 	}
-	if _, err := removeSkillDirs(page.targetRoot, []string{skill.name}); err != nil {
+	if _, err := removeSkillDirs(sp.targetRoot, []string{skill.name}); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("deleted %s", skill.name), nil
 }
 
 func (a *App) handleStatusChooseSkills(page statusPage, action tui.StatusAction) (string, error) {
-	repo, ok := page.repos[action.RepoID]
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
+	repo, ok := sp.repos[action.RepoID]
 	if !ok {
 		return "", fmt.Errorf("unknown repo action %q", action.RepoID)
 	}
 	if len(repo.selection.discovered) == 0 {
 		return "", fmt.Errorf("no SKILL.md files found in %s", repo.source.Repo.Dir)
 	}
-	if err := a.applySourceSkillSelection(page.projectRoot, page.config, repo.source.URL.Original, page.targetRoot, repo.selection, action.Selected); err != nil {
+	if err := a.applySourceSkillSelection(sp.root, sp.config, repo.source.URL.Original, sp.targetRoot, repo.selection, action.Selected); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("updated skills for %s", action.RepoID), nil
 }
 
 func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action tui.StatusAction) (string, error) {
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
 	if action.URL == "" {
 		return "no repo URL entered", nil
 	}
-	selection, ok := page.addedRepos[action.URL]
+	selection, ok := sp.addedRepos[action.URL]
 	if !ok {
 		gitURL, repo, err := a.prepareRepo(ctx, page.skinkHome, action.URL)
 		if err != nil {
 			return "", err
 		}
-		selection, err = sourceSkillSelectionFor(page.config, gitURL.Original, repo)
+		selection, err = sourceSkillSelectionFor(sp.config, gitURL.Original, repo)
 		if err != nil {
 			return "", err
 		}
@@ -386,22 +589,26 @@ func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action t
 	if len(selection.discovered) == 0 {
 		return "", fmt.Errorf("no SKILL.md files found in %s", action.URL)
 	}
-	if err := a.applySourceSkillSelection(page.projectRoot, page.config, action.URL, page.targetRoot, selection, action.Selected); err != nil {
+	if err := a.applySourceSkillSelection(sp.root, sp.config, action.URL, sp.targetRoot, selection, action.Selected); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("added skills from %s", action.URL), nil
 }
 
 func (a *App) handleStatusUpdateTag(ctx context.Context, page statusPage, action tui.StatusAction) (string, error) {
-	repo, ok := page.repos[action.RepoID]
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
+	repo, ok := sp.repos[action.RepoID]
 	if !ok {
 		return "", fmt.Errorf("unknown repo action %q", action.RepoID)
 	}
 	if action.Tag == "" {
 		return "no tag selected", nil
 	}
-	cfg := skillrepo.SetRepoVersion(page.config, repo.source.URL.Original, action.Tag)
-	if err := skillrepo.SaveConfig(page.projectRoot, cfg); err != nil {
+	cfg := skillrepo.SetRepoVersion(sp.config, repo.source.URL.Original, action.Tag)
+	if err := skillrepo.SaveConfig(sp.root, cfg); err != nil {
 		return "", err
 	}
 	if err := repo.source.Repo.Fetch(ctx); err != nil {
@@ -414,7 +621,11 @@ func (a *App) handleStatusUpdateTag(ctx context.Context, page statusPage, action
 }
 
 func (a *App) handleStatusNext(ctx context.Context, page statusPage, action tui.StatusAction) (string, error) {
-	repo, ok := page.repos[action.RepoID]
+	sp := page.scopePage(action.Scope)
+	if sp == nil {
+		return "", fmt.Errorf("no %s scope available", action.Scope)
+	}
+	repo, ok := sp.repos[action.RepoID]
 	if !ok {
 		return "", fmt.Errorf("unknown repo action %q", action.RepoID)
 	}
@@ -427,6 +638,7 @@ func (a *App) handleStatusNext(ctx context.Context, page statusPage, action tui.
 	if action.Tag != "" {
 		return a.handleStatusUpdateTag(ctx, page, tui.StatusAction{
 			Kind:   tui.StatusActionUpdateTag,
+			Scope:  action.Scope,
 			RepoID: action.RepoID,
 			Tag:    action.Tag,
 		})
@@ -447,6 +659,7 @@ func (a *App) handleStatusNext(ctx context.Context, page statusPage, action tui.
 	}
 	return a.handleStatusUpdateTag(ctx, page, tui.StatusAction{
 		Kind:   tui.StatusActionUpdateTag,
+		Scope:  action.Scope,
 		RepoID: action.RepoID,
 		Tag:    repo.latestSemverTag,
 	})
