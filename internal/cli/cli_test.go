@@ -1246,3 +1246,90 @@ skilldir = ".custom/agent/skills"
 		t.Fatal("expected status snapshot")
 	}
 }
+
+func TestGlobalAddRepoSyncsSkillsImmediately(t *testing.T) {
+	app, home, proj, g, p, _ := setup(t)
+	// No global config — start fresh.
+	// Create a project config so TUI doesn't error.
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports: []
+`)
+	// Seed the clone that will be created when the user adds the repo.
+	newClone := filepath.Join(home, ".skink", "github.com", "acme", "global-skills")
+	g.seedAfter[newClone] = map[string]string{
+		"alpha/SKILL.md": "---\nname: alpha\ndescription: Alpha skill.\n---\n",
+	}
+	p.statusActions = []tui.StatusAction{
+		{Kind: tui.StatusActionAddRepo, Scope: tui.ScopeGlobal, URL: "github.com/acme/global-skills", Selected: []int{0}},
+		{Kind: tui.StatusActionQuit},
+	}
+
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	// The global config should have been created.
+	configPath := filepath.Join(home, ".skink", ".skink.toml")
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("global config should be created at %s: %v", configPath, err)
+	}
+	// The skill should be synced to the global skill dir.
+	dest := filepath.Join(home, ".agent", "skills", "alpha", "SKILL.md")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected global skill synced to %s: %v", dest, err)
+	}
+	if !strings.Contains(string(got), "Alpha skill") {
+		t.Fatalf("global skill content = %q", got)
+	}
+}
+
+func TestGlobalAddRepoWithoutProjectConfig(t *testing.T) {
+	app, home, _, g, p, _ := setup(t)
+	// No global config, no project config.
+	newClone := filepath.Join(home, ".skink", "github.com", "acme", "global-skills")
+	g.seedAfter[newClone] = map[string]string{
+		"alpha/SKILL.md": "---\nname: alpha\ndescription: Alpha skill.\n---\n",
+	}
+	p.statusActions = []tui.StatusAction{
+		{Kind: tui.StatusActionAddRepo, Scope: tui.ScopeGlobal, URL: "github.com/acme/global-skills", Selected: []int{0}},
+		{Kind: tui.StatusActionQuit},
+	}
+
+	if err := run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, ".agent", "skills", "alpha", "SKILL.md")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected global skill synced to %s: %v", dest, err)
+	}
+	if !strings.Contains(string(got), "Alpha skill") {
+		t.Fatalf("global skill content = %q", got)
+	}
+}
+
+func TestGlobalAddRepoViaBootstrap(t *testing.T) {
+	app, home, _, g, p, _ := setup(t)
+	// --global with no existing config triggers bootstrap, then add repo.
+	newClone := filepath.Join(home, ".skink", "github.com", "acme", "global-skills")
+	g.seedAfter[newClone] = map[string]string{
+		"alpha/SKILL.md": "---\nname: alpha\ndescription: Alpha skill.\n---\n",
+	}
+	p.statusActions = []tui.StatusAction{
+		{Kind: tui.StatusActionAddRepo, Scope: tui.ScopeGlobal, URL: "github.com/acme/global-skills", Selected: []int{0}},
+		{Kind: tui.StatusActionQuit},
+	}
+
+	if err := run(t, app, "--global"); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(home, ".agent", "skills", "alpha", "SKILL.md")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected global skill synced to %s after --global bootstrap: %v", dest, err)
+	}
+	if !strings.Contains(string(got), "Alpha skill") {
+		t.Fatalf("global skill content = %q", got)
+	}
+}

@@ -292,22 +292,23 @@ func (a *App) buildScopePage(
 	}
 	sec := tui.StatusSection{Scope: scope, Title: title}
 
+	// Always resolve targetRoot so add-repo can sync even when no skills
+	// are configured yet.
+	if scope == tui.ScopeGlobal {
+		sp.targetRoot = layout.GlobalSkillDir(cfg.SkillDir)
+	} else {
+		resolved, err := a.resolveSkillDir(root, cfg)
+		if err != nil {
+			return nil, tui.StatusSection{}, err
+		}
+		sp.targetRoot = resolved
+	}
+
 	if len(skills) == 0 {
 		return sp, sec, nil
 	}
 
-	var targetRoot string
-	if scope == tui.ScopeGlobal {
-		targetRoot = layout.GlobalSkillDir(cfg.SkillDir)
-	} else {
-		targetRoot, err = a.resolveSkillDir(root, cfg)
-		if err != nil {
-			return nil, tui.StatusSection{}, err
-		}
-	}
-	sp.targetRoot = targetRoot
-
-	statuses, err := syncer.Check(syncItemsForSkills(skills), targetRoot)
+	statuses, err := syncer.Check(syncItemsForSkills(skills), sp.targetRoot)
 	if err != nil {
 		return nil, tui.StatusSection{}, err
 	}
@@ -346,7 +347,7 @@ func (a *App) buildScopePage(
 			descriptionByDir[item.Path] = item.Description
 		}
 		for _, skill := range skillsByRepo[repoID] {
-			dest := filepath.Join(targetRoot, skill.Name)
+			dest := filepath.Join(sp.targetRoot, skill.Name)
 			status := statusByPath[dest]
 			if status == "" {
 				status = syncer.StatusDifferent
@@ -604,6 +605,22 @@ func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action t
 	// Ensure the config file exists for this scope before saving imports.
 	if err := a.ensureScopeConfig(action.Scope, sp); err != nil {
 		return "", err
+	}
+	// Resolve targetRoot if not yet set (first add-repo to an empty scope).
+	if sp.targetRoot == "" {
+		layout, err := paths.Resolve(a.Env)
+		if err != nil {
+			return "", err
+		}
+		if action.Scope == tui.ScopeGlobal {
+			sp.targetRoot = layout.GlobalSkillDir(sp.config.SkillDir)
+		} else {
+			resolved, err := a.resolveSkillDir(sp.root, sp.config)
+			if err != nil {
+				return "", err
+			}
+			sp.targetRoot = resolved
+		}
 	}
 	selection, ok := sp.addedRepos[action.URL]
 	if !ok {
