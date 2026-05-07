@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -141,6 +142,9 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 				Scope: tui.ScopeGlobal,
 				Title: "Global Skills",
 			})
+			page.snapshot.Preferences = tui.StatusPreferences{
+				GlobalSkillDirDefault: paths.DefaultGlobalSkillDir,
+			}
 			return page, nil
 		}
 		sp, sec, err := a.buildScopePage(ctx, layout, tui.ScopeGlobal, layout.SkinkHome, globalCfg)
@@ -149,6 +153,10 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 		}
 		page.scopes[tui.ScopeGlobal] = sp
 		page.snapshot.Sections = append(page.snapshot.Sections, sec)
+		page.snapshot.Preferences = tui.StatusPreferences{
+			GlobalSkillDir:        globalCfg.SkillDir,
+			GlobalSkillDirDefault: paths.DefaultGlobalSkillDir,
+		}
 		return page, nil
 	}
 
@@ -224,6 +232,14 @@ func (a *App) buildStatusPage(ctx context.Context, message string) (statusPage, 
 
 	// Check for duplicate skill names across scopes.
 	addDuplicateWarnings(&page)
+
+	// Populate preferences.
+	page.snapshot.Preferences = tui.StatusPreferences{
+		GlobalSkillDir:        globalCfg.SkillDir,
+		GlobalSkillDirDefault: paths.DefaultGlobalSkillDir,
+		ProjectSkillDir:       projectCfg.SkillDir,
+		ProjectEditable:       projectRoot != "",
+	}
 
 	return page, nil
 }
@@ -527,6 +543,8 @@ func (a *App) handleStatusAction(ctx context.Context, page statusPage, action tu
 		return a.handleStatusChooseSkills(page, action)
 	case tui.StatusActionAddRepo:
 		return a.handleStatusAddRepo(ctx, page, action)
+	case tui.StatusActionPreferences:
+		return a.handleStatusPreferences(page, action)
 	default:
 		return "", nil
 	}
@@ -641,6 +659,113 @@ func (a *App) handleStatusAddRepo(ctx context.Context, page statusPage, action t
 		return "", err
 	}
 	return fmt.Sprintf("added skills from %s", action.URL), nil
+}
+
+func (a *App) handleStatusPreferences(page statusPage, action tui.StatusAction) (string, error) {
+	if action.Preferences == nil {
+		return "", nil
+	}
+	layout, err := paths.Resolve(a.Env)
+	if err != nil {
+		return "", err
+	}
+
+	var msgs []string
+
+	// Handle global skilldir change.
+	globalSP := page.scopePage(tui.ScopeGlobal)
+	if globalSP != nil {
+		oldSkillDir := globalSP.config.SkillDir
+		newSkillDir := action.Preferences.GlobalSkillDir
+		if newSkillDir != oldSkillDir {
+			if _, err := skillrepo.NormalizeSkillDir(newSkillDir); err != nil {
+				return "", fmt.Errorf("invalid global skilldir: %w", err)
+			}
+			if err := a.maybeRenameSkillDir(
+				layout.GlobalSkillDir(oldSkillDir),
+				layout.GlobalSkillDir(newSkillDir),
+			); err != nil {
+				return "", err
+			}
+			globalSP.config.SkillDir = newSkillDir
+			if err := a.ensureScopeConfig(tui.ScopeGlobal, globalSP); err != nil {
+				return "", err
+			}
+			if err := skillrepo.SaveConfig(globalSP.root, globalSP.config); err != nil {
+				return "", err
+			}
+			msgs = append(msgs, "updated global skill directory")
+		}
+	}
+
+	// Handle project skilldir change.
+	projectSP := page.scopePage(tui.ScopeProject)
+	if projectSP != nil && projectSP.root != "" {
+		oldSkillDir := projectSP.config.SkillDir
+		newSkillDir := action.Preferences.ProjectSkillDir
+		if newSkillDir != oldSkillDir {
+			if newSkillDir != "" {
+				if _, err := skillrepo.NormalizeSkillDir(newSkillDir); err != nil {
+					return "", fmt.Errorf("invalid project skilldir: %w", err)
+				}
+			}
+			oldResolved := ""
+			if oldSkillDir != "" {
+				oldResolved = filepath.Join(projectSP.root, filepath.FromSlash(oldSkillDir))
+			}
+			newResolved := ""
+			if newSkillDir != "" {
+				newResolved = filepath.Join(projectSP.root, filepath.FromSlash(newSkillDir))
+			}
+			if oldResolved != "" && newResolved != "" {
+				if err := a.maybeRenameSkillDir(oldResolved, newResolved); err != nil {
+					return "", err
+				}
+			}
+			projectSP.config.SkillDir = newSkillDir
+			if err := skillrepo.SaveConfig(projectSP.root, projectSP.config); err != nil {
+				return "", err
+			}
+			msgs = append(msgs, "updated project skill directory")
+		}
+	}
+
+	if len(msgs) == 0 {
+		return "no changes", nil
+	}
+	return strings.Join(msgs, "; "), nil
+}
+
+// maybeRenameSkillDir checks if oldDir exists and newDir does not, and if so,
+// offers to rename the old directory to the new path.
+func (a *App) maybeRenameSkillDir(oldDir, newDir string) error {
+	if oldDir == "" || newDir == "" || oldDir == newDir {
+		return nil
+	}
+	oldInfo, oldErr := os.Stat(oldDir)
+	if oldErr != nil || !oldInfo.IsDir() {
+		return nil
+	}
+	_, newErr := os.Stat(newDir)
+	if newErr == nil {
+		// New directory already exists; don't offer rename.
+		return nil
+	}
+	prompt := fmt.Sprintf("Move existing skills from %s to %s?", oldDir, newDir)
+	yes, err := a.Prompter.Confirm(prompt)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(newDir), 0o755); err != nil {
+		return fmt.Errorf("create parent directory: %w", err)
+	}
+	if err := os.Rename(oldDir, newDir); err != nil {
+		return fmt.Errorf("rename skill directory: %w", err)
+	}
+	return nil
 }
 
 // ensureScopeConfig creates the config file for a scope if it doesn't exist yet.

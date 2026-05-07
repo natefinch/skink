@@ -26,6 +26,7 @@ type Prompter interface {
 	Text(title, prompt, placeholder string) (string, error)
 	SingleSelect(title string, items []string) (int, error)
 	BrowseSkills(title string, items []tui.BrowseItem) ([]int, error)
+	Confirm(prompt string) (bool, error)
 	Status(title string, snapshot tui.StatusSnapshot, update func() tui.StatusSnapshot, addRepo tui.StatusAddRepoFunc) (tui.StatusAction, error)
 	InteractiveStatus(
 		title string,
@@ -46,6 +47,9 @@ func (teaPrompter) SingleSelect(title string, items []string) (int, error) {
 }
 func (teaPrompter) BrowseSkills(title string, items []tui.BrowseItem) ([]int, error) {
 	return tui.RunBrowseSelect(title, items)
+}
+func (teaPrompter) Confirm(prompt string) (bool, error) {
+	return tui.RunConfirm(prompt)
 }
 func (teaPrompter) Status(title string, snapshot tui.StatusSnapshot, update func() tui.StatusSnapshot, addRepo tui.StatusAddRepoFunc) (tui.StatusAction, error) {
 	return tui.RunStatus(title, snapshot, update, addRepo)

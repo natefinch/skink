@@ -96,6 +96,57 @@ func selectedIndices[T any](items []T, selected map[int]bool) []int {
 	return out
 }
 
+// RunConfirm shows a yes/no confirmation prompt and returns true if the user
+// confirms.
+func RunConfirm(prompt string) (bool, error) {
+	m := confirmModel{prompt: prompt}
+	res, err := runModel(m)
+	if err != nil {
+		return false, err
+	}
+	if res.cancelled {
+		return false, nil
+	}
+	return res.confirmed, nil
+}
+
+type confirmModel struct {
+	prompt    string
+	confirmed bool
+	cancelled bool
+	done      bool
+}
+
+func (m confirmModel) Init() tea.Cmd { return nil }
+
+func (m confirmModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c", "esc", "n", "N":
+			m.cancelled = true
+			return m, tea.Quit
+		case "y", "Y":
+			m.confirmed = true
+			m.done = true
+			return m, tea.Quit
+		case "enter":
+			// default is no
+			m.done = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m confirmModel) View() tea.View {
+	var b strings.Builder
+	b.WriteString(m.prompt)
+	b.WriteString(" ")
+	b.WriteString(helpStyle.Render("y/N"))
+	return newView(b.String())
+}
+
 // RunTextPrompt shows a single-line text input with the given prompt and
 // returns the entered (trimmed) value. An empty value is rejected.
 func RunTextPrompt(title, prompt, placeholder string) (string, error) {
@@ -727,16 +778,24 @@ const (
 	StatusActionUpdateTag    StatusActionKind = "update-tag"
 	StatusActionChooseSkills StatusActionKind = "choose-skills"
 	StatusActionAddRepo      StatusActionKind = "add-repo"
+	StatusActionPreferences  StatusActionKind = "preferences"
 )
 
 type StatusAction struct {
-	Kind     StatusActionKind
-	Scope    Scope
-	RepoID   string
-	SkillID  string
-	Tag      string
-	URL      string
-	Selected []int
+	Kind        StatusActionKind
+	Scope       Scope
+	RepoID      string
+	SkillID     string
+	Tag         string
+	URL         string
+	Selected    []int
+	Preferences *PreferencesUpdate
+}
+
+// PreferencesUpdate carries the changed values from the preferences page.
+type PreferencesUpdate struct {
+	GlobalSkillDir  string
+	ProjectSkillDir string
 }
 
 type StatusAddRepoFunc func(string) (StatusAddRepoResult, error)
@@ -756,8 +815,17 @@ type StatusSection struct {
 }
 
 type StatusSnapshot struct {
-	Sections []StatusSection
-	Message  string
+	Sections    []StatusSection
+	Message     string
+	Preferences StatusPreferences
+}
+
+// StatusPreferences holds the current preferences displayed on the prefs page.
+type StatusPreferences struct {
+	GlobalSkillDir        string // configured value (may be empty for default)
+	GlobalSkillDirDefault string // default value when configured is empty
+	ProjectSkillDir       string // configured value (may be empty for auto-detect)
+	ProjectEditable       bool   // false when no project root or --global mode
 }
 
 // Repos returns all repos across all sections.
@@ -849,6 +917,208 @@ type statusRow struct {
 	skill   int
 }
 
+// prefsField identifies one editable field on the preferences page.
+type prefsField int
+
+const (
+	prefsFieldGlobalSkillDir prefsField = iota
+	prefsFieldProjectSkillDir
+	prefsFieldSave
+	prefsFieldCount // sentinel
+)
+
+// prefsModel is a sub-view of statusModel for editing preferences.
+type prefsModel struct {
+	cursor    prefsField
+	prefs     StatusPreferences
+	editing   bool
+	input     textinput.Model
+	err       string
+	saved     bool
+	back      bool
+	cancelled bool
+
+	// edited holds the changed values; nil means no changes.
+	globalSkillDir  string
+	projectSkillDir string
+	dirty           bool
+}
+
+func newPrefsModel(prefs StatusPreferences) prefsModel {
+	ti := textinput.New()
+	ti.CharLimit = 512
+	ti.SetWidth(64)
+	return prefsModel{
+		prefs:           prefs,
+		input:           ti,
+		globalSkillDir:  prefs.GlobalSkillDir,
+		projectSkillDir: prefs.ProjectSkillDir,
+	}
+}
+
+func (m prefsModel) effectiveGlobalSkillDir() string {
+	if m.globalSkillDir != "" {
+		return m.globalSkillDir
+	}
+	return m.prefs.GlobalSkillDirDefault
+}
+
+func (m *prefsModel) startEdit() tea.Cmd {
+	switch m.cursor {
+	case prefsFieldGlobalSkillDir:
+		m.input.SetValue(m.globalSkillDir)
+		m.input.Placeholder = m.prefs.GlobalSkillDirDefault
+	case prefsFieldProjectSkillDir:
+		if !m.prefs.ProjectEditable {
+			return nil
+		}
+		m.input.SetValue(m.projectSkillDir)
+		m.input.Placeholder = "e.g. .github/skills"
+	default:
+		return nil
+	}
+	m.editing = true
+	m.err = ""
+	_ = m.input.Focus()
+	return textinput.Blink
+}
+
+func (m *prefsModel) finishEdit() {
+	v := strings.TrimSpace(m.input.Value())
+	switch m.cursor {
+	case prefsFieldGlobalSkillDir:
+		if v != m.prefs.GlobalSkillDir {
+			m.dirty = true
+		}
+		m.globalSkillDir = v
+	case prefsFieldProjectSkillDir:
+		if v != m.prefs.ProjectSkillDir {
+			m.dirty = true
+		}
+		m.projectSkillDir = v
+	}
+	m.editing = false
+}
+
+func (m prefsModel) update(msg tea.Msg) (prefsModel, tea.Cmd) {
+	if m.editing {
+		return m.updateEdit(msg)
+	}
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.cancelled = true
+			return m, nil
+		case "esc":
+			m.back = true
+			return m, nil
+		case "up", "k":
+			m.err = ""
+			if m.cursor > 0 {
+				m.cursor--
+				// Skip project field if not editable.
+				if m.cursor == prefsFieldProjectSkillDir && !m.prefs.ProjectEditable {
+					m.cursor--
+				}
+			}
+		case "down", "j":
+			m.err = ""
+			if m.cursor < prefsFieldCount-1 {
+				m.cursor++
+				// Skip project field if not editable.
+				if m.cursor == prefsFieldProjectSkillDir && !m.prefs.ProjectEditable {
+					m.cursor++
+				}
+			}
+		case "enter":
+			if m.cursor == prefsFieldSave {
+				m.saved = true
+				return m, nil
+			}
+			return m, m.startEdit()
+		}
+	}
+	return m, nil
+}
+
+func (m prefsModel) updateEdit(msg tea.Msg) (prefsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.cancelled = true
+			return m, nil
+		case "esc":
+			m.editing = false
+			return m, nil
+		case "enter":
+			m.finishEdit()
+			return m, nil
+		}
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+func (m prefsModel) view() string {
+	var b strings.Builder
+	writeStatusHeader(&b, "Preferences")
+
+	// Global skilldir
+	cursor := listCursor(m.cursor == prefsFieldGlobalSkillDir)
+	label := "Global skill directory: "
+	if m.editing && m.cursor == prefsFieldGlobalSkillDir {
+		fmt.Fprintf(&b, "%s%s\n%s\n", cursor, label, m.input.View())
+	} else {
+		value := m.globalSkillDir
+		suffix := ""
+		if value == "" {
+			value = m.prefs.GlobalSkillDirDefault
+			suffix = helpStyle.Render(" (default)")
+		}
+		fmt.Fprintf(&b, "%s%s%s%s\n", cursor, label, selectStyle.Render(value), suffix)
+	}
+
+	// Project skilldir
+	b.WriteString("\n")
+	cursor = listCursor(m.cursor == prefsFieldProjectSkillDir)
+	label = "Project skill directory: "
+	if !m.prefs.ProjectEditable {
+		fmt.Fprintf(&b, "%s%s%s\n", cursor, label, helpStyle.Render("(not available)"))
+	} else if m.editing && m.cursor == prefsFieldProjectSkillDir {
+		fmt.Fprintf(&b, "%s%s\n%s\n", cursor, label, m.input.View())
+	} else {
+		value := m.projectSkillDir
+		suffix := ""
+		if value == "" {
+			value = "(auto-detect)"
+			suffix = ""
+		}
+		fmt.Fprintf(&b, "%s%s%s%s\n", cursor, label, selectStyle.Render(value), suffix)
+	}
+
+	// Save button
+	b.WriteString("\n")
+	cursor = listCursor(m.cursor == prefsFieldSave)
+	saveLabel := "Save"
+	if m.dirty {
+		saveLabel = "Save *"
+	}
+	fmt.Fprintf(&b, "%s%s\n", cursor, titleStyle.Render("[ "+saveLabel+" ]"))
+
+	if m.err != "" {
+		b.WriteString("\n")
+		b.WriteString(errStyle.Render(m.err))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("↑/↓ move • enter edit/save • esc back"))
+	return b.String()
+}
+
 type statusModel struct {
 	title         string
 	snapshot      StatusSnapshot
@@ -871,6 +1141,7 @@ type statusModel struct {
 	applying      bool
 	browse        *browseModel
 	browseRepoID  string
+	prefs         *prefsModel
 	err           string
 	update        func() StatusSnapshot
 }
@@ -983,6 +1254,9 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.applying {
 			return m, nil
+		}
+		if m.prefs != nil {
+			return m.updatePrefs(msg)
 		}
 		if m.addRepo != nil {
 			return m.updateAddRepo(msg)
@@ -1110,6 +1384,11 @@ func (m statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirmDelete = true
 				m.err = ""
 			}
+		case "p":
+			prefs := newPrefsModel(m.snapshot.Preferences)
+			m.prefs = &prefs
+			m.err = ""
+			return m, nil
 		}
 	}
 	return m, nil
@@ -1125,6 +1404,30 @@ func (m statusModel) finishStatusAction(action StatusAction) (tea.Model, tea.Cmd
 	m.applying = true
 	m.err = ""
 	return m, runStatusApply(m.apply, action)
+}
+
+func (m statusModel) updatePrefs(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.prefs.update(msg)
+	m.prefs = &updated
+	switch {
+	case updated.cancelled:
+		m.cancelled = true
+		return m, tea.Quit
+	case updated.back:
+		m.prefs = nil
+		return m, nil
+	case updated.saved:
+		action := StatusAction{
+			Kind: StatusActionPreferences,
+			Preferences: &PreferencesUpdate{
+				GlobalSkillDir:  updated.globalSkillDir,
+				ProjectSkillDir: updated.projectSkillDir,
+			},
+		}
+		m.prefs = nil
+		return m.finishStatusAction(action)
+	}
+	return m, cmd
 }
 
 func (m statusModel) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1314,6 +1617,9 @@ func (m statusModel) View() tea.View {
 	if m.browse != nil {
 		return m.browse.View()
 	}
+	if m.prefs != nil {
+		return newStatusView(m.prefs.view())
+	}
 	var b strings.Builder
 	writeStatusHeader(&b, m.title)
 	if len(m.snapshot.Sections) == 0 {
@@ -1398,7 +1704,7 @@ func (m statusModel) View() tea.View {
 		b.WriteString(errStyle.Render("Delete this skill locally and remove it from .skink config? y/N"))
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("move: ↑/↓ • q/esc quit"))
+	b.WriteString(helpStyle.Render("move: ↑/↓ • p preferences • q/esc quit"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("repo: a add repo, c choose skills, t choose tag, u update newest/head"))
 	b.WriteString("\n")

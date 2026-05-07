@@ -736,7 +736,7 @@ func TestStatusViewHelpIsSplitByTopic(t *testing.T) {
 	}}), nil)
 	content := m.View().Content
 	for _, want := range []string{
-		"move: ↑/↓ • q/esc quit",
+		"move: ↑/↓ • p preferences • q/esc quit",
 		"repo: a add repo, c choose skills, t choose tag, u update newest/head",
 		"skills: ←/→ collapse/expand, s sync/overwrite, d delete",
 	} {
@@ -913,4 +913,243 @@ func TestViewRenders(t *testing.T) {
 	_ = singleModel{items: []string{"a"}}.View()
 	_ = textModel{prompt: "p"}.View()
 	_ = browseModel{items: []BrowseItem{{Name: "a", Path: "p"}}, selected: map[int]bool{}, expanded: map[int]bool{}}.View()
+}
+
+func TestPrefsModelOpenAndBack(t *testing.T) {
+	m := newStatusModel("status", projectSnapshot([]StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+	}}), nil)
+	m.snapshot.Preferences = StatusPreferences{
+		GlobalSkillDir:        "",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectSkillDir:       ".github/skills",
+		ProjectEditable:       true,
+	}
+	// Press p to open preferences.
+	next, _ := m.Update(keyMsg("p"))
+	m = next.(statusModel)
+	if m.prefs == nil {
+		t.Fatal("pressing p should open preferences")
+	}
+	content := m.View().Content
+	if !strings.Contains(content, "Preferences") {
+		t.Errorf("prefs view should show title:\n%s", content)
+	}
+	if !strings.Contains(content, "Global skill directory") {
+		t.Errorf("prefs view should show global skilldir:\n%s", content)
+	}
+	if !strings.Contains(content, "Project skill directory") {
+		t.Errorf("prefs view should show project skilldir:\n%s", content)
+	}
+
+	// Press esc to go back.
+	next, _ = m.Update(keyMsg("esc"))
+	m = next.(statusModel)
+	if m.prefs != nil {
+		t.Error("esc should close preferences")
+	}
+}
+
+func TestPrefsModelEditAndSave(t *testing.T) {
+	prefs := StatusPreferences{
+		GlobalSkillDir:        ".agents/skills",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectSkillDir:       ".github/skills",
+		ProjectEditable:       true,
+	}
+	pm := newPrefsModel(prefs)
+
+	// Cursor starts on global skilldir. Press enter to edit.
+	updated, _ := pm.update(keyMsg("enter"))
+	pm = updated
+	if !pm.editing {
+		t.Fatal("enter should start editing")
+	}
+
+	// Press esc to cancel editing without changes.
+	updated, _ = pm.update(keyMsg("esc"))
+	pm = updated
+	if pm.editing {
+		t.Fatal("esc should cancel editing")
+	}
+
+	// Simulate a direct value change (as if user cleared and retyped).
+	pm.globalSkillDir = ".custom/skills"
+	pm.dirty = true
+
+	// Navigate to save button and press enter.
+	updated, _ = pm.update(keyMsg("down")) // project skilldir
+	pm = updated
+	updated, _ = pm.update(keyMsg("down")) // save
+	pm = updated
+	if pm.cursor != prefsFieldSave {
+		t.Fatalf("cursor should be on save, got %d", pm.cursor)
+	}
+	updated, _ = pm.update(keyMsg("enter"))
+	pm = updated
+	if !pm.saved {
+		t.Fatal("enter on save should set saved")
+	}
+}
+
+func TestPrefsModelSkipProjectWhenNotEditable(t *testing.T) {
+	prefs := StatusPreferences{
+		GlobalSkillDir:        "",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectEditable:       false,
+	}
+	pm := newPrefsModel(prefs)
+
+	// Cursor starts on global skilldir. Press down should skip project and go to save.
+	updated, _ := pm.update(keyMsg("down"))
+	pm = updated
+	if pm.cursor != prefsFieldSave {
+		t.Fatalf("cursor should skip project and land on save, got %d", pm.cursor)
+	}
+
+	// Press up should go back to global.
+	updated, _ = pm.update(keyMsg("up"))
+	pm = updated
+	if pm.cursor != prefsFieldGlobalSkillDir {
+		t.Fatalf("cursor should go back to global, got %d", pm.cursor)
+	}
+}
+
+func TestPrefsModelCancelDuringEdit(t *testing.T) {
+	prefs := StatusPreferences{
+		GlobalSkillDir:        ".agents/skills",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectEditable:       true,
+	}
+	pm := newPrefsModel(prefs)
+
+	// Start editing.
+	updated, _ := pm.update(keyMsg("enter"))
+	pm = updated
+	if !pm.editing {
+		t.Fatal("should be editing")
+	}
+
+	// Press esc to cancel the edit (stay in prefs).
+	updated, _ = pm.update(keyMsg("esc"))
+	pm = updated
+	if pm.editing {
+		t.Fatal("esc should cancel editing")
+	}
+	if pm.back {
+		t.Fatal("esc during edit should not go back")
+	}
+}
+
+func TestPrefsModelViewShowsDefault(t *testing.T) {
+	prefs := StatusPreferences{
+		GlobalSkillDir:        "",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectEditable:       true,
+	}
+	pm := newPrefsModel(prefs)
+	content := pm.view()
+	if !strings.Contains(content, ".agents/skills") {
+		t.Errorf("should show default global skilldir:\n%s", content)
+	}
+	if !strings.Contains(content, "(default)") {
+		t.Errorf("should show (default) label:\n%s", content)
+	}
+}
+
+func TestPrefsModelStatusIntegration(t *testing.T) {
+	var gotApply StatusAction
+	apply := func(action StatusAction) (StatusSnapshot, error) {
+		gotApply = action
+		return StatusSnapshot{
+			Sections: []StatusSection{{
+				Scope: ScopeProject,
+				Title: "Project Skills",
+				Repos: []StatusRepo{{ID: "repo", Scope: ScopeProject}},
+			}},
+			Message: "preferences saved",
+		}, nil
+	}
+	m := newStatusModelWithApply("status", projectSnapshot([]StatusRepo{{
+		ID:   "repo",
+		Name: "repo",
+	}}), nil, nil, apply)
+	m.snapshot.Preferences = StatusPreferences{
+		GlobalSkillDir:        ".agents/skills",
+		GlobalSkillDirDefault: ".agents/skills",
+		ProjectSkillDir:       ".github/skills",
+		ProjectEditable:       true,
+	}
+
+	// Press p to open prefs.
+	next, _ := m.Update(keyMsg("p"))
+	m = next.(statusModel)
+	if m.prefs == nil {
+		t.Fatal("should open prefs")
+	}
+
+	// Navigate to save button (down twice: project skilldir, then save).
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	next, _ = m.Update(keyMsg("down"))
+	m = next.(statusModel)
+	// Press enter to save.
+	next, cmd := m.Update(keyMsg("enter"))
+	m = next.(statusModel)
+	if !m.applying {
+		t.Fatal("save should trigger apply")
+	}
+	if m.prefs != nil {
+		t.Fatal("prefs should be closed after save")
+	}
+
+	// Simulate apply completion.
+	next, cmd = m.Update(cmd())
+	m = next.(statusModel)
+	if m.applying {
+		t.Fatal("should not be applying after apply completes")
+	}
+	if gotApply.Kind != StatusActionPreferences {
+		t.Fatalf("expected preferences action, got %q", gotApply.Kind)
+	}
+	if gotApply.Preferences == nil {
+		t.Fatal("expected preferences update")
+	}
+	if gotApply.Preferences.GlobalSkillDir != ".agents/skills" {
+		t.Fatalf("expected global skilldir .agents/skills, got %q", gotApply.Preferences.GlobalSkillDir)
+	}
+	if gotApply.Preferences.ProjectSkillDir != ".github/skills" {
+		t.Fatalf("expected project skilldir .github/skills, got %q", gotApply.Preferences.ProjectSkillDir)
+	}
+}
+
+func TestConfirmModelYes(t *testing.T) {
+	m := confirmModel{prompt: "Do it?"}
+	next, _ := m.Update(keyMsg("y"))
+	cm := next.(confirmModel)
+	if !cm.confirmed {
+		t.Error("y should confirm")
+	}
+}
+
+func TestConfirmModelNo(t *testing.T) {
+	m := confirmModel{prompt: "Do it?"}
+	next, _ := m.Update(keyMsg("n"))
+	cm := next.(confirmModel)
+	if cm.confirmed {
+		t.Error("n should not confirm")
+	}
+	if !cm.cancelled {
+		t.Error("n should cancel")
+	}
+}
+
+func TestConfirmModelEnterDefaultsNo(t *testing.T) {
+	m := confirmModel{prompt: "Do it?"}
+	next, _ := m.Update(keyMsg("enter"))
+	cm := next.(confirmModel)
+	if cm.confirmed {
+		t.Error("enter should default to no")
+	}
 }

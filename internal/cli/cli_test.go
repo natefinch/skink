@@ -78,16 +78,17 @@ func (f *fakeGit) RunOutput(_ context.Context, dir string, args ...string) (stri
 }
 
 type fakePrompter struct {
-	singleAnswers []int
-	textAnswers   []string
-	browseAnswers [][]int
-	browseErrors  []error
-	browseItems   []tui.BrowseItem
-	statusActions []tui.StatusAction
-	statusInitial []tui.StatusSnapshot
-	statusItems   []tui.StatusSnapshot
-	statusApplies int
-	onStatusStart func(tui.StatusSnapshot)
+	singleAnswers  []int
+	textAnswers    []string
+	browseAnswers  [][]int
+	browseErrors   []error
+	browseItems    []tui.BrowseItem
+	confirmAnswers []bool
+	statusActions  []tui.StatusAction
+	statusInitial  []tui.StatusSnapshot
+	statusItems    []tui.StatusSnapshot
+	statusApplies  int
+	onStatusStart  func(tui.StatusSnapshot)
 }
 
 func (f *fakePrompter) Text(title, prompt, placeholder string) (string, error) {
@@ -122,6 +123,15 @@ func (f *fakePrompter) BrowseSkills(title string, items []tui.BrowseItem) ([]int
 	}
 	ans := f.browseAnswers[0]
 	f.browseAnswers = f.browseAnswers[1:]
+	return ans, nil
+}
+
+func (f *fakePrompter) Confirm(prompt string) (bool, error) {
+	if len(f.confirmAnswers) == 0 {
+		return false, nil
+	}
+	ans := f.confirmAnswers[0]
+	f.confirmAnswers = f.confirmAnswers[1:]
 	return ans, nil
 }
 
@@ -1331,5 +1341,116 @@ func TestGlobalAddRepoViaBootstrap(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "Alpha skill") {
 		t.Fatalf("global skill content = %q", got)
+	}
+}
+
+func TestHandleStatusPreferencesUpdatesProjectSkillDir(t *testing.T) {
+	app, _, proj, _, p, _ := setup(t)
+	p.confirmAnswers = []bool{true} // yes to rename
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports:
+  - url: github.com/acme/team
+    dirs:
+      - alpha
+`)
+	// Create old skilldir with some content.
+	oldDir := filepath.Join(proj, "skills")
+	if err := os.MkdirAll(filepath.Join(oldDir, "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "alpha", "SKILL.md"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	page := statusPage{
+		scopes: map[tui.Scope]*statusScopePage{
+			tui.ScopeProject: {
+				root:   proj,
+				config: skillrepo.Config{SkillDir: "skills"},
+				repos:  map[string]statusRepoAction{},
+			},
+			tui.ScopeGlobal: {
+				root:   filepath.Join(proj, ".."),
+				config: skillrepo.Config{SkillDir: ".agents/skills"},
+				repos:  map[string]statusRepoAction{},
+			},
+		},
+	}
+	action := tui.StatusAction{
+		Kind: tui.StatusActionPreferences,
+		Preferences: &tui.PreferencesUpdate{
+			GlobalSkillDir:  ".agents/skills",
+			ProjectSkillDir: "new-skills",
+		},
+	}
+	msg, err := app.handleStatusAction(context.Background(), page, action)
+	if err != nil {
+		t.Fatalf("handleStatusPreferences error: %v", err)
+	}
+	if !strings.Contains(msg, "updated project skill directory") {
+		t.Fatalf("expected success message, got %q", msg)
+	}
+
+	// Old dir should be renamed to new dir.
+	newDir := filepath.Join(proj, "new-skills")
+	if _, err := os.Stat(newDir); err != nil {
+		t.Fatalf("new skill dir should exist: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(newDir, "alpha", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("skill content should be preserved: %v", err)
+	}
+	if string(content) != "content\n" {
+		t.Fatalf("skill content = %q, want %q", content, "content\n")
+	}
+	// Old dir should no longer exist.
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatal("old skill dir should not exist after rename")
+	}
+
+	// Config should be updated.
+	cfg, err := skillrepo.ReadImports(proj)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if cfg.SkillDir != "new-skills" {
+		t.Fatalf("config skilldir = %q, want %q", cfg.SkillDir, "new-skills")
+	}
+}
+
+func TestHandleStatusPreferencesNoChangeReturnsNoChanges(t *testing.T) {
+	app, _, proj, _, _, _ := setup(t)
+	writeProjectConfig(t, proj, `
+skilldir: skills
+imports: []
+`)
+	page := statusPage{
+		scopes: map[tui.Scope]*statusScopePage{
+			tui.ScopeProject: {
+				root:   proj,
+				config: skillrepo.Config{SkillDir: "skills"},
+				repos:  map[string]statusRepoAction{},
+			},
+			tui.ScopeGlobal: {
+				root:   filepath.Join(proj, ".."),
+				config: skillrepo.Config{SkillDir: ".agents/skills"},
+				repos:  map[string]statusRepoAction{},
+			},
+		},
+	}
+	action := tui.StatusAction{
+		Kind: tui.StatusActionPreferences,
+		Preferences: &tui.PreferencesUpdate{
+			GlobalSkillDir:  ".agents/skills",
+			ProjectSkillDir: "skills",
+		},
+	}
+	msg, err := app.handleStatusAction(context.Background(), page, action)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != "no changes" {
+		t.Fatalf("expected 'no changes', got %q", msg)
 	}
 }
