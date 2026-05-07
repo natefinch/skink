@@ -922,7 +922,7 @@ func TestPrefsModelOpenAndBack(t *testing.T) {
 	}}), nil)
 	m.snapshot.Preferences = StatusPreferences{
 		GlobalSkillDir:        "",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectSkillDir:       ".github/skills",
 		ProjectEditable:       true,
 	}
@@ -953,8 +953,8 @@ func TestPrefsModelOpenAndBack(t *testing.T) {
 
 func TestPrefsModelEditAndSave(t *testing.T) {
 	prefs := StatusPreferences{
-		GlobalSkillDir:        ".agents/skills",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDir:        ".agent/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectSkillDir:       ".github/skills",
 		ProjectEditable:       true,
 	}
@@ -996,7 +996,7 @@ func TestPrefsModelEditAndSave(t *testing.T) {
 func TestPrefsModelSkipProjectWhenNotEditable(t *testing.T) {
 	prefs := StatusPreferences{
 		GlobalSkillDir:        "",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectEditable:       false,
 	}
 	pm := newPrefsModel(prefs)
@@ -1018,8 +1018,8 @@ func TestPrefsModelSkipProjectWhenNotEditable(t *testing.T) {
 
 func TestPrefsModelCancelDuringEdit(t *testing.T) {
 	prefs := StatusPreferences{
-		GlobalSkillDir:        ".agents/skills",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDir:        ".agent/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectEditable:       true,
 	}
 	pm := newPrefsModel(prefs)
@@ -1045,12 +1045,12 @@ func TestPrefsModelCancelDuringEdit(t *testing.T) {
 func TestPrefsModelViewShowsDefault(t *testing.T) {
 	prefs := StatusPreferences{
 		GlobalSkillDir:        "",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectEditable:       true,
 	}
 	pm := newPrefsModel(prefs)
 	content := pm.view()
-	if !strings.Contains(content, ".agents/skills") {
+	if !strings.Contains(content, ".agent/skills") {
 		t.Errorf("should show default global skilldir:\n%s", content)
 	}
 	if !strings.Contains(content, "(default)") {
@@ -1076,8 +1076,8 @@ func TestPrefsModelStatusIntegration(t *testing.T) {
 		Name: "repo",
 	}}), nil, nil, apply)
 	m.snapshot.Preferences = StatusPreferences{
-		GlobalSkillDir:        ".agents/skills",
-		GlobalSkillDirDefault: ".agents/skills",
+		GlobalSkillDir:        ".agent/skills",
+		GlobalSkillDirDefault: ".agent/skills",
 		ProjectSkillDir:       ".github/skills",
 		ProjectEditable:       true,
 	}
@@ -1116,8 +1116,8 @@ func TestPrefsModelStatusIntegration(t *testing.T) {
 	if gotApply.Preferences == nil {
 		t.Fatal("expected preferences update")
 	}
-	if gotApply.Preferences.GlobalSkillDir != ".agents/skills" {
-		t.Fatalf("expected global skilldir .agents/skills, got %q", gotApply.Preferences.GlobalSkillDir)
+	if gotApply.Preferences.GlobalSkillDir != ".agent/skills" {
+		t.Fatalf("expected global skilldir .agent/skills, got %q", gotApply.Preferences.GlobalSkillDir)
 	}
 	if gotApply.Preferences.ProjectSkillDir != ".github/skills" {
 		t.Fatalf("expected project skilldir .github/skills, got %q", gotApply.Preferences.ProjectSkillDir)

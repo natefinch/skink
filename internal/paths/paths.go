@@ -48,7 +48,7 @@ func (f FakeEnv) Getwd() (string, error) {
 
 // DefaultGlobalSkillDir is the default skill directory for global skills,
 // relative to the user's home directory.
-const DefaultGlobalSkillDir = ".agents/skills"
+const DefaultGlobalSkillDir = ".agent/skills"
 
 // Layout holds the resolved skink paths.
 type Layout struct {

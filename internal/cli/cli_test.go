@@ -993,7 +993,7 @@ func writeGlobalConfig(t *testing.T, home, body string) {
 func TestGlobalSyncSyncsGlobalSkills(t *testing.T) {
 	app, home, _, _, _, out := setup(t)
 	writeGlobalConfig(t, home, `
-skilldir = ".agents/skills"
+skilldir = ".agent/skills"
 [[imports]]
   url = "https://github.com/acme/global-skills/"
   dirs = ["alpha"]
@@ -1050,7 +1050,7 @@ func TestGlobalBootstrapCreatesConfig(t *testing.T) {
 func TestStatusShowsGlobalAndProjectSections(t *testing.T) {
 	app, home, proj, _, p, _ := setup(t)
 	writeGlobalConfig(t, home, `
-skilldir = ".agents/skills"
+skilldir = ".agent/skills"
 [[imports]]
   url = "https://github.com/acme/global-skills/"
   dirs = ["g-alpha"]
@@ -1099,7 +1099,7 @@ imports:
 func TestStatusShowsGlobalOnlyWithoutProjectConfig(t *testing.T) {
 	app, home, _, _, p, _ := setup(t)
 	writeGlobalConfig(t, home, `
-skilldir = ".agents/skills"
+skilldir = ".agent/skills"
 [[imports]]
   url = "https://github.com/acme/global-skills/"
   dirs = ["alpha"]
@@ -1171,7 +1171,7 @@ imports:
 func TestDuplicateSkillWarning(t *testing.T) {
 	app, home, proj, _, p, _ := setup(t)
 	writeGlobalConfig(t, home, `
-skilldir = ".agents/skills"
+skilldir = ".agent/skills"
 [[imports]]
   url = "https://github.com/acme/global-skills/"
   dirs = ["alpha"]
@@ -1215,7 +1215,7 @@ func TestGlobalSkillDirResolution(t *testing.T) {
 	app, home, _, _, p, _ := setup(t)
 	// Custom global skilldir.
 	writeGlobalConfig(t, home, `
-skilldir = ".custom/agents/skills"
+skilldir = ".custom/agent/skills"
 [[imports]]
   url = "https://github.com/acme/global-skills/"
   dirs = ["alpha"]
@@ -1251,7 +1251,7 @@ skilldir = ".custom/agents/skills"
 	if err := run(t, app, "--global"); err != nil {
 		t.Fatal(err)
 	}
-	// With no skilldir set, default should resolve to $HOME/.agents/skills.
+	// With no skilldir set, default should resolve to $HOME/.agent/skills.
 	if len(p.statusItems) == 0 {
 		t.Fatal("expected status snapshot")
 	}
@@ -1372,7 +1372,7 @@ imports:
 			},
 			tui.ScopeGlobal: {
 				root:   filepath.Join(proj, ".."),
-				config: skillrepo.Config{SkillDir: ".agents/skills"},
+				config: skillrepo.Config{SkillDir: ".agent/skills"},
 				repos:  map[string]statusRepoAction{},
 			},
 		},
@@ -1380,7 +1380,7 @@ imports:
 	action := tui.StatusAction{
 		Kind: tui.StatusActionPreferences,
 		Preferences: &tui.PreferencesUpdate{
-			GlobalSkillDir:  ".agents/skills",
+			GlobalSkillDir:  ".agent/skills",
 			ProjectSkillDir: "new-skills",
 		},
 	}
@@ -1434,7 +1434,7 @@ imports: []
 			},
 			tui.ScopeGlobal: {
 				root:   filepath.Join(proj, ".."),
-				config: skillrepo.Config{SkillDir: ".agents/skills"},
+				config: skillrepo.Config{SkillDir: ".agent/skills"},
 				repos:  map[string]statusRepoAction{},
 			},
 		},
@@ -1442,7 +1442,7 @@ imports: []
 	action := tui.StatusAction{
 		Kind: tui.StatusActionPreferences,
 		Preferences: &tui.PreferencesUpdate{
-			GlobalSkillDir:  ".agents/skills",
+			GlobalSkillDir:  ".agent/skills",
 			ProjectSkillDir: "skills",
 		},
 	}

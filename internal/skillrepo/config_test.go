@@ -362,7 +362,7 @@ func TestReadGlobalImportsMissing(t *testing.T) {
 func TestReadGlobalImportsFound(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, ".skink.toml", `
-skilldir = ".agents/skills"
+skilldir = ".agent/skills"
 [[imports]]
   url = "https://github.com/acme/skills/"
   dirs = ["alpha"]
@@ -374,7 +374,7 @@ skilldir = ".agents/skills"
 	if !found {
 		t.Error("existing config should return found=true")
 	}
-	if cfg.SkillDir != ".agents/skills" {
+	if cfg.SkillDir != ".agent/skills" {
 		t.Errorf("skilldir = %q", cfg.SkillDir)
 	}
 	if len(cfg.Imports) != 1 {
@@ -386,7 +386,7 @@ func TestSaveConfigAt(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "custom.toml")
 	cfg := Config{
-		SkillDir: ".agents/skills",
+		SkillDir: ".agent/skills",
 		Imports: []Import{{
 			URL:  "https://github.com/acme/skills/",
 			Dirs: []string{"alpha"},
@@ -399,7 +399,7 @@ func TestSaveConfigAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(got), ".agents/skills") {
+	if !strings.Contains(string(got), ".agent/skills") {
 		t.Fatalf("saved config should contain skilldir, got %q", got)
 	}
 	if !strings.Contains(string(got), "github.com/acme/skills") {
